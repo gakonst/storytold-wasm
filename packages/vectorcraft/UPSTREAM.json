@@ -1,0 +1,29 @@
+{
+  "repository": "https://github.com/storytold/vectorcraft",
+  "source_commit": "77708ad8defeef03f116b1bbebec0c89eef35170",
+  "worker_entry": "apps/vectorcraft-worker",
+  "included_crates": [
+    "apps/vectorcraft-worker",
+    "crates/brush",
+    "crates/cad",
+    "crates/color",
+    "crates/doc",
+    "crates/effects",
+    "crates/engine",
+    "crates/eps",
+    "crates/format",
+    "crates/geom",
+    "crates/mcp",
+    "crates/metafile",
+    "crates/pathops",
+    "crates/pdf",
+    "crates/plugins",
+    "crates/render",
+    "crates/svg",
+    "crates/testkit",
+    "crates/text",
+    "crates/tools",
+    "crates/trace"
+  ],
+  "note": "Extracted WASM dependency closure; Worker adapters and portability changes are maintained in this repository."
+}

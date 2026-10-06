@@ -1,0 +1,19 @@
+[package]
+name = "vectorcraft-text"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "VectorCraft text: font database, shaping, layout, glyph outlines"
+
+[lints]
+workspace = true
+
+[dependencies]
+vectorcraft-geom = { workspace = true }
+vectorcraft-doc = { workspace = true }
+kurbo = { workspace = true }
+skrifa = { workspace = true }
+harfrust = { workspace = true }
+log = { workspace = true }
+# Font subsets for embedding (SVG @font-face); MIT OR Apache-2.0, already used by the PDF writer.
+subsetter = { version = "0.2", default-features = false }

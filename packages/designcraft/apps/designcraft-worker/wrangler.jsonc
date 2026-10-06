@@ -1,0 +1,14 @@
+{
+  "name": "designcraft-headless",
+  "main": "dist/worker.mjs",
+  "compatibility_date": "2026-02-10",
+  "rules": [
+    {
+      "type": "CompiledWasm",
+      "globs": [
+        "**/*.wasm"
+      ],
+      "fallthrough": true
+    }
+  ]
+}

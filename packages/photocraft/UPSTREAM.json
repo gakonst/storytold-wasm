@@ -1,0 +1,27 @@
+{
+  "repository": "https://github.com/storytold/photocraft",
+  "source_commit": "4bbaccd2c5890a982440555f5baa20848d4c818d",
+  "worker_entry": "apps/photocraft-worker",
+  "included_crates": [
+    "apps/photocraft-worker",
+    "crates/algo",
+    "crates/cms",
+    "crates/codecs",
+    "crates/color",
+    "crates/compose",
+    "crates/doc",
+    "crates/engine",
+    "crates/format",
+    "crates/geom",
+    "crates/io",
+    "crates/ops",
+    "crates/paint",
+    "crates/plugins",
+    "crates/psd",
+    "crates/raster",
+    "crates/raw",
+    "crates/text",
+    "crates/vector"
+  ],
+  "note": "Extracted WASM dependency closure; Worker adapters and portability changes are maintained in this repository."
+}

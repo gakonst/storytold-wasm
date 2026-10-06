@@ -1,0 +1,9 @@
+{
+  "repository": "https://github.com/storytold/cloud-worker",
+  "source_commit": "e375345bf6109a23425f8a8c2d35fee79eb062c7",
+  "source_paths": [
+    "bench/minimax_bench.py"
+  ],
+  "scope": "Graph construction and frame-length arithmetic only; inference runs in a separate ComfyUI host.",
+  "changes": "Rust/WASM port, HTTP adapter, isolated build and parity tests. Additional images-array input and collision-free downscale node IDs for more than 40 references."
+}

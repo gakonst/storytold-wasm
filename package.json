@@ -1,0 +1,40 @@
+{
+  "name": "storytold-wasm",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Extracted Storytold WebAssembly libraries and Cloudflare Worker adapters",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "packages/photocraft/apps/photocraft-worker",
+    "packages/lightcraft/apps/lightcraft-worker",
+    "packages/vectorcraft/apps/vectorcraft-worker",
+    "packages/designcraft/apps/designcraft-worker",
+    "packages/filmcraft/apps/filmcraft-worker",
+    "packages/effectcraft/apps/effectcraft-worker",
+    "packages/printcraft/apps/printcraft-worker",
+    "packages/craft-fonts/crates/craft-fonts-wasm",
+    "packages/artcraftx/apps/artcraft-worker",
+    "packages/cloud-worker",
+    "packages/onnx-inference",
+    "packages/point-generator",
+    "packages/actor-spawning",
+    "packages/kinect-geometry"
+  ],
+  "scripts": {
+    "build": "node scripts/run.mjs build",
+    "test": "node scripts/run.mjs test",
+    "bundle": "node scripts/run.mjs bundle",
+    "dev": "node scripts/run.mjs dev",
+    "deploy": "node scripts/run.mjs deploy",
+    "check": "python3 scripts/check_sources.py",
+    "setup": "cargo install wasm-bindgen-cli --version 0.2.129 --locked --root toolchain"
+  },
+  "devDependencies": {
+    "wrangler": "4.147.0",
+    "miniflare": "4.20260210.0",
+    "esbuild": "0.27.3"
+  }
+}

@@ -1,0 +1,17 @@
+[package]
+name = "photocraft-worker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+[lib]
+crate-type = ["cdylib", "rlib"]
+[lints]
+workspace = true
+[dependencies]
+photocraft-engine.workspace = true
+photocraft-io.workspace = true
+photocraft-codecs.workspace = true
+serde_json.workspace = true
+wasm-bindgen = "=0.2.129"
+

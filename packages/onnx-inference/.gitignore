@@ -1,0 +1,7 @@
+core/target/
+pkg/
+dist/
+deploy-preview/
+.wrangler/
+build.log
+node_modules/

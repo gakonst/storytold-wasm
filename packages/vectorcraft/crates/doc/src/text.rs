@@ -1,0 +1,508 @@
+//! Text objects (model only; layout and glyph outlines live in `vectorcraft-text`).
+
+use serde::{Deserialize, Serialize};
+use vectorcraft_color::{Color, Paint};
+use vectorcraft_geom::{Affine, PathData, Point, Rect};
+
+use crate::appearance::{Appearance, AppearanceItem, Dash, FillLayer, LineCap, LineJoin, StrokeLayer};
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Justify {
+    #[default]
+    Left,
+    Center,
+    Right,
+    JustifyLeft,
+    JustifyCenter,
+    JustifyRight,
+    JustifyAll,
+}
+
+/// Character attributes (the Character panel).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CharStyle {
+    pub font_family: String,
+    #[serde(default = "regular")]
+    pub font_style: String,
+    /// Size in points.
+    pub size: f64,
+    /// Leading in points; None = Auto (120% of size).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leading: Option<f64>,
+    /// Tracking in 1/1000 em.
+    #[serde(default)]
+    pub tracking: f64,
+    /// Kerning: None = Auto (metrics), Some(v) = manual in 1/1000 em.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kerning: Option<f64>,
+    #[serde(default)]
+    pub baseline_shift: f64,
+    #[serde(default = "hundred")]
+    pub h_scale: f64,
+    #[serde(default = "hundred")]
+    pub v_scale: f64,
+    #[serde(default)]
+    pub rotation: f64,
+    pub fill: Paint,
+    #[serde(default)]
+    pub stroke: Paint,
+    #[serde(default)]
+    pub stroke_width: f64,
+    #[serde(default)]
+    pub underline: bool,
+    #[serde(default)]
+    pub strikethrough: bool,
+    #[serde(default)]
+    pub all_caps: bool,
+    /// OpenType features that differ from the defaults (OpenType panel), as tags: `"dlig"` turns
+    /// a feature on, `"-liga"` off.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub features: Vec<String>,
+    /// Character style (Character Styles panel) these attributes come from; None = Normal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style_name: Option<String>,
+    /// Overprint Fill / Overprint Stroke of these characters (see [`crate::FillLayer::overprint`]).
+    #[serde(default, skip_serializing_if = "crate::skip::is_default")]
+    pub overprint_fill: bool,
+    #[serde(default, skip_serializing_if = "crate::skip::is_default")]
+    pub overprint_stroke: bool,
+    /// Cap, join, miter limit and dashes of the character stroke (Stroke panel, with type
+    /// selected); defaults as for object strokes.
+    #[serde(default, skip_serializing_if = "crate::skip::is_default")]
+    pub stroke_cap: LineCap,
+    #[serde(default, skip_serializing_if = "crate::skip::is_default")]
+    pub stroke_join: LineJoin,
+    #[serde(default = "ten", skip_serializing_if = "is_ten")]
+    pub stroke_miter_limit: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke_dash: Option<Dash>,
+    /// Superscript or subscript (Character panel).
+    #[serde(default, skip_serializing_if = "crate::skip::is_default")]
+    pub position: CharPosition,
+    /// Small Caps (Character panel): lowercase letters drawn as capitals at this percentage of the
+    /// size (Document Setup → Type → Small Caps); None = off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub small_caps: Option<f64>,
+}
+
+/// Superscript or subscript proportions in percent of the font size (Document Setup → Type).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ScriptMetrics {
+    /// Glyph size.
+    pub size: f64,
+    /// Baseline offset: up for superscript, down for subscript.
+    pub position: f64,
+}
+
+impl ScriptMetrics {
+    pub const DEFAULT: Self = Self { size: 58.3, position: 33.3 };
+}
+
+impl Default for ScriptMetrics {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+/// Character position (Character panel Superscript / Subscript). The proportions are the
+/// document's when the position is applied, and follow later Document Setup changes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum CharPosition {
+    #[default]
+    Normal,
+    Superscript(ScriptMetrics),
+    Subscript(ScriptMetrics),
+}
+
+impl CharPosition {
+    /// Glyph scale and baseline shift (points, positive = up) for text of `size` points.
+    pub fn scale_shift(self, size: f64) -> (f64, f64) {
+        match self {
+            CharPosition::Normal => (1.0, 0.0),
+            CharPosition::Superscript(m) => (m.size / 100.0, m.position / 100.0 * size),
+            CharPosition::Subscript(m) => (m.size / 100.0, -m.position / 100.0 * size),
+        }
+    }
+    /// `normal`, `superscript` or `subscript`.
+    pub fn id(self) -> &'static str {
+        match self {
+            CharPosition::Normal => "normal",
+            CharPosition::Superscript(_) => "superscript",
+            CharPosition::Subscript(_) => "subscript",
+        }
+    }
+}
+
+fn ten() -> f64 {
+    10.0
+}
+fn is_ten(v: &f64) -> bool {
+    *v == 10.0
+}
+fn regular() -> String {
+    "Regular".into()
+}
+fn hundred() -> f64 {
+    100.0
+}
+
+impl Default for CharStyle {
+    fn default() -> Self {
+        Self {
+            font_family: "Source Sans 3".into(),
+            font_style: "Regular".into(),
+            size: 12.0,
+            leading: None,
+            tracking: 0.0,
+            kerning: None,
+            baseline_shift: 0.0,
+            h_scale: 100.0,
+            v_scale: 100.0,
+            rotation: 0.0,
+            fill: Paint::solid(Color::BLACK),
+            stroke: Paint::None,
+            stroke_width: 0.0,
+            underline: false,
+            strikethrough: false,
+            all_caps: false,
+            features: vec![],
+            style_name: None,
+            overprint_fill: false,
+            overprint_stroke: false,
+            stroke_cap: LineCap::Butt,
+            stroke_join: LineJoin::Miter,
+            stroke_miter_limit: 10.0,
+            stroke_dash: None,
+            position: CharPosition::Normal,
+            small_caps: None,
+        }
+    }
+}
+
+impl CharStyle {
+    pub fn effective_leading(&self) -> f64 {
+        self.leading.unwrap_or(self.size * 1.2)
+    }
+    /// Do the characters draw a stroke (a paint and a positive weight)?
+    pub fn has_stroke(&self) -> bool {
+        !self.stroke.is_none() && self.stroke_width > 0.0
+    }
+    /// The character stroke as a stroke layer (paint, weight, cap, join, miter limit, dashes and
+    /// overprint), so type strokes share the object strokes' geometry, rendering and export.
+    pub fn stroke_layer(&self) -> StrokeLayer {
+        StrokeLayer {
+            overprint: self.overprint_stroke,
+            cap: self.stroke_cap,
+            join: self.stroke_join,
+            miter_limit: self.stroke_miter_limit,
+            dash: self.stroke_dash.clone(),
+            ..StrokeLayer::new(self.stroke.clone(), self.stroke_width)
+        }
+    }
+    /// Take the paint, weight, cap, join, miter limit and dashes of `st` as the character stroke
+    /// (the options characters have no use for, such as alignment and arrowheads, are dropped).
+    pub fn set_stroke_layer(&mut self, st: &StrokeLayer) {
+        self.stroke = st.paint.clone();
+        self.stroke_width = st.width;
+        self.stroke_cap = st.cap;
+        self.stroke_join = st.join;
+        self.stroke_miter_limit = st.miter_limit;
+        self.stroke_dash = st.dash.clone();
+    }
+    /// The character fill as a fill layer, overprinting as the characters do.
+    fn fill_layer(&self) -> FillLayer {
+        FillLayer { overprint: self.overprint_fill, ..FillLayer::new(self.fill.clone()) }
+    }
+    /// The characters' paint as an object appearance (their outlines'): the fill, plus the
+    /// stroke when it draws one, overprinting as the characters do.
+    pub fn appearance(&self) -> Appearance {
+        let mut a = Appearance { items: vec![AppearanceItem::Fill(self.fill_layer())], ..Default::default() };
+        if self.has_stroke() {
+            a.items.push(AppearanceItem::Stroke(self.stroke_layer()));
+        }
+        a
+    }
+    /// The characters' paint as the basic fill and stroke rows (the stroke row even when it has
+    /// no paint): the appearance the Eyedropper and graphic styles take from type.
+    pub fn basic_appearance(&self) -> Appearance {
+        Appearance { items: vec![AppearanceItem::Fill(self.fill_layer()), AppearanceItem::Stroke(self.stroke_layer())], ..Default::default() }
+    }
+}
+
+/// Tab stop alignment (Tabs panel).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TabAlign {
+    #[default]
+    Left,
+    Center,
+    Right,
+    /// Aligns on the first `align_on` character (a decimal point by default).
+    Decimal,
+}
+
+/// A tab stop, measured from the left edge of the text (area type: the frame's left edge).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TabStop {
+    pub position: f64,
+    #[serde(default)]
+    pub align: TabAlign,
+    /// Leader characters repeated across the tab's gap (e.g. ". ").
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub leader: String,
+    /// Decimal tabs align on this character.
+    #[serde(default = "default_align_on")]
+    pub align_on: char,
+}
+
+fn default_align_on() -> char {
+    '.'
+}
+
+/// Distance between default tab stops when no explicit stop applies (½ inch).
+pub const DEFAULT_TAB_INTERVAL: f64 = 36.0;
+
+/// Paragraph attributes (the Paragraph panel).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ParaStyle {
+    #[serde(default)]
+    pub justify: Justify,
+    #[serde(default)]
+    pub left_indent: f64,
+    #[serde(default)]
+    pub right_indent: f64,
+    #[serde(default)]
+    pub first_line_indent: f64,
+    #[serde(default)]
+    pub space_before: f64,
+    #[serde(default)]
+    pub space_after: f64,
+    #[serde(default)]
+    pub hyphenate: bool,
+    /// Tab stops (Tabs panel), sorted by position.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tabs: Vec<TabStop>,
+    /// Paragraph style (Paragraph Styles panel) these attributes come from; None = Normal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style_name: Option<String>,
+}
+
+/// Area Type Options "First Baseline" offset.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FirstBaseline {
+    /// The tallest glyph ascent touches the frame top (Illustrator's default).
+    #[default]
+    Ascent,
+    CapHeight,
+    XHeight,
+    /// The first line's leading.
+    Leading,
+    /// Exactly `first_baseline_min` below the top.
+    Fixed,
+}
+
+/// Text Wrap Options of a wrap object (Object → Text Wrap).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TextWrap {
+    /// Distance kept between the text and the object, in points (Illustrator's default 6 pt).
+    pub offset: f64,
+    /// Invert Wrap: text flows inside the object instead of around it.
+    pub invert: bool,
+}
+
+impl Default for TextWrap {
+    fn default() -> Self {
+        Self { offset: 6.0, invert: false }
+    }
+}
+
+/// A resolved wrap shape on an area text object: the outline of a wrap object in text space.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WrapShape {
+    pub path: PathData,
+    #[serde(flatten)]
+    pub wrap: TextWrap,
+}
+
+/// Type on a Path effect: how each glyph is oriented on the path (Type → Type on a Path).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PathEffect {
+    /// Glyphs rotate with the path (the default).
+    #[default]
+    Rainbow,
+    /// Vertical edges stay vertical; the baseline follows the path.
+    Skew,
+    /// Horizontal edges stay horizontal; vertical edges are perpendicular to the path.
+    #[serde(rename = "3dRibbon")]
+    Ribbon3d,
+    /// No rotation: the left end of each glyph's baseline sits on the path.
+    StairStep,
+    /// The baseline centre sits on the path and glyphs point away from the path's centre.
+    Gravity,
+}
+
+impl PathEffect {
+    pub const ALL: [PathEffect; 5] = [PathEffect::Rainbow, PathEffect::Skew, PathEffect::Ribbon3d, PathEffect::StairStep, PathEffect::Gravity];
+    pub fn id(self) -> &'static str {
+        match self {
+            PathEffect::Rainbow => "rainbow",
+            PathEffect::Skew => "skew",
+            PathEffect::Ribbon3d => "3dRibbon",
+            PathEffect::StairStep => "stairStep",
+            PathEffect::Gravity => "gravity",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        let k = s.to_ascii_lowercase().replace([' ', '-', '_'], "");
+        Self::ALL.into_iter().find(|e| e.id().to_ascii_lowercase() == k || (k == "ribbon3d" && *e == PathEffect::Ribbon3d))
+    }
+}
+
+/// Area Type Options: rows and columns, gutters, inset and first baseline of area type.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AreaOptions {
+    pub rows: usize,
+    pub columns: usize,
+    /// Gutter between rows/columns in points.
+    pub gutter: f64,
+    /// Inset from the frame edges in points.
+    pub inset: f64,
+    pub first_baseline: FirstBaseline,
+    /// Minimum first-baseline offset in points.
+    pub first_baseline_min: f64,
+}
+
+impl Default for AreaOptions {
+    fn default() -> Self {
+        Self { rows: 1, columns: 1, gutter: 18.0, inset: 0.0, first_baseline: FirstBaseline::Ascent, first_baseline_min: 0.0 }
+    }
+}
+
+/// A named character or paragraph style: the attributes it sets (a subset of [`CharStyle`] or
+/// [`ParaStyle`] fields, by their serialized names). Text using it records the name.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TextStyleDef {
+    pub name: String,
+    #[serde(default)]
+    pub attrs: serde_json::Map<String, serde_json::Value>,
+}
+
+/// A run of text sharing one character style.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TextRun {
+    pub text: String,
+    pub style: CharStyle,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum TextKind {
+    /// Point type: anchored at the baseline origin of the first line.
+    Point,
+    /// Area type flowed inside `frame` (document coordinates, untransformed by `xf`).
+    Area { frame: PathData },
+    /// Type on a path, starting at `start` (0..1 of the path length).
+    OnPath { path: PathData, start: f64 },
+}
+
+/// A text object. `runs` split into paragraphs at `\n`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TextObject {
+    /// Top-to-bottom, right-to-left writing. Defaults to horizontal for old documents.
+    #[serde(default, skip_serializing_if = "crate::skip::is_default")]
+    pub vertical: bool,
+    pub kind: TextKind,
+    /// Maps text space (origin = first baseline start for point type) to the document.
+    pub xf: Affine,
+    pub runs: Vec<TextRun>,
+    #[serde(default)]
+    pub para: ParaStyle,
+    /// Area Type Options (area type only).
+    #[serde(default, skip_serializing_if = "crate::skip::is_default")]
+    pub area: AreaOptions,
+    /// Type on a Path effect (type on a path only).
+    #[serde(default, rename = "pathEffect", skip_serializing_if = "crate::skip::is_default")]
+    pub path_effect: PathEffect,
+    /// Wrap objects above this area type, resolved by the engine after each edit (text space).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wrap: Vec<WrapShape>,
+    /// Cached layout bounds in text space, filled in by the layout engine (not serialized).
+    #[serde(skip)]
+    pub cached_bounds: Option<Rect>,
+}
+
+impl TextObject {
+    pub fn point(origin: Point, text: &str, style: CharStyle) -> Self {
+        Self {
+            vertical: false,
+            kind: TextKind::Point,
+            xf: Affine::translate(origin.to_vec2()),
+            runs: vec![TextRun { text: text.into(), style }],
+            para: ParaStyle::default(),
+            area: AreaOptions::default(),
+            path_effect: PathEffect::default(),
+            wrap: Vec::new(),
+            cached_bounds: None,
+        }
+    }
+    pub fn plain_text(&self) -> String {
+        self.runs.iter().map(|r| r.text.as_str()).collect()
+    }
+    pub fn first_style(&self) -> CharStyle {
+        self.runs.first().map(|r| r.style.clone()).unwrap_or_default()
+    }
+    /// Approximate bounds when no layout cache is available (0.55 em average advance).
+    pub fn estimate_bounds(&self) -> Rect {
+        let st = self.first_style();
+        let text = self.plain_text();
+        let lines: Vec<&str> = text.split('\n').collect();
+        let w = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0) as f64 * st.size * 0.55;
+        let lead = st.effective_leading();
+        Rect::new(0.0, -st.size * 0.8, w.max(1.0), -st.size * 0.8 + lead * lines.len().max(1) as f64)
+    }
+    pub fn bounds(&self) -> Option<Rect> {
+        match &self.kind {
+            TextKind::Area { frame } => frame.bounds().map(|b| self.xf.transform_rect_bbox(b)),
+            TextKind::OnPath { path, .. } => path.bounds().map(|b| self.xf.transform_rect_bbox(b)),
+            TextKind::Point => Some(self.xf.transform_rect_bbox(self.cached_bounds.unwrap_or_else(|| self.estimate_bounds()))),
+        }
+    }
+    pub fn transform(&mut self, a: Affine) {
+        self.xf = a * self.xf;
+    }
+    /// Scale the character strokes' weights and dashes by `s` (they are drawn in text space, so
+    /// `1 / scale` keeps their weight through a transform that scales the type).
+    pub fn scale_char_strokes(&mut self, s: f64) {
+        for r in &mut self.runs {
+            r.style.stroke_width *= s;
+            if let Some(d) = &mut r.style.stroke_dash {
+                d.scale(s);
+            }
+        }
+    }
+    /// Layout bounds in text space (the layout cache, else the estimate): the box an unplaced run
+    /// gradient fits, as the renderers lay it out.
+    pub fn local_bounds(&self) -> Rect {
+        self.cached_bounds.unwrap_or_else(|| self.estimate_bounds())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn point_text_basics() {
+        let t = TextObject::point(Point::new(10.0, 20.0), "Hello", CharStyle::default());
+        assert_eq!(t.plain_text(), "Hello");
+        let b = t.bounds().unwrap();
+        assert!(b.x0 >= 10.0 - 1e-9 && b.y1 > 20.0);
+        assert_eq!(CharStyle::default().effective_leading(), 14.399999999999999);
+    }
+}

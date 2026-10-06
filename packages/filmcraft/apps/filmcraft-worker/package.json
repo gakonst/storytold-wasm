@@ -1,0 +1,15 @@
+{
+  "name": "filmcraft-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bash build.sh",
+    "test": "node tests/worker.mjs",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "esbuild": "0.27.3",
+    "miniflare": "4.20260210.0",
+    "wrangler": "4.147.0"
+  }
+}

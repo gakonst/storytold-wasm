@@ -1,0 +1,19 @@
+{
+  "repository": "https://github.com/storytold/artcraftx",
+  "source_commit": "98c2a48940aa0a54604637f665ee539c122fa707",
+  "included_crates": [
+    "apps/artcraft-worker",
+    "crates/lib/data/primitives",
+    "crates/lib/data/web_base64",
+    "crates/lib/errors",
+    "crates/lib/files/file_hashing",
+    "crates/lib/files/images",
+    "crates/lib/files/mimetypes",
+    "crates/lib/files/thumbnails",
+    "crates/lib/jwt_light",
+    "crates/lib/url_utils",
+    "crates/models",
+    "crates/testing/test_utils",
+    "crates/workspace-build-acceleration"
+  ]
+}

@@ -1,0 +1,16 @@
+[package]
+name = "craft-fonts-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+[lib]
+crate-type = ["cdylib", "rlib"]
+[features]
+embed = ["craft-fonts/embed"]
+[dependencies]
+craft-fonts = { path = "../craft-fonts" }
+wasm-bindgen = "=0.2.129"
+serde_json = "1"
+[lints]
+workspace = true

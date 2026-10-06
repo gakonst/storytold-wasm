@@ -1,0 +1,926 @@
+//! Line breaking and glyph placement for point, area and on-path type.
+
+use std::ops::Range;
+
+use kurbo::{Affine, BezPath, ParamCurve, ParamCurveArclen, PathEl, PathSeg, Point, Rect, Shape, Vec2};
+use vectorcraft_doc::{CharStyle, Justify, ParaStyle, PathEffect, TextKind, TextObject};
+
+use crate::composer::{Breakpoint, compose};
+use crate::fontdb::FontDb;
+use crate::hyphen::hyphen_points;
+use crate::shape::{SGlyph, cap_x_heights, hyphen_glyph, shape_range, style_metrics};
+use crate::{Composer, FirstBaseline, LayoutOptions, LineInfo, PositionedGlyph, TextLayout};
+
+const EPS: f64 = 1e-6;
+
+struct Ctx<'a> {
+    vertical: bool,
+    on_path: bool,
+    db: &'a FontDb,
+    text: &'a str,
+    runs: Vec<(Range<usize>, &'a CharStyle)>,
+    default: CharStyle,
+    opts: &'a LayoutOptions,
+    out: TextLayout,
+}
+
+impl Ctx<'_> {
+    fn style_at(&self, b: usize) -> &CharStyle {
+        let find = |b: usize| self.runs.iter().find(|(r, _)| r.start <= b && b < r.end).map(|(_, s)| *s);
+        find(b).or_else(|| b.checked_sub(1).and_then(find)).or_else(|| self.runs.first().map(|(_, s)| *s)).unwrap_or(&self.default)
+    }
+
+    fn shape_para(&self, r: Range<usize>) -> Vec<SGlyph> {
+        let mut v = Vec::with_capacity(r.len());
+        shape_range(self.db, self.text, r, &self.runs, &self.opts.features, &mut v);
+        v
+    }
+
+    fn emit(&mut self, g: &SGlyph, pre: Affine, origin: Point, angle: f64, advance: f64, line: usize) {
+        let src = self.db.outline(&g.face, g.gid);
+        let local = Affine::rotate(-g.rotation.to_radians()) * Affine::translate((g.dx, g.dy - g.bshift)) * Affine::scale_non_uniform(g.sx, g.sy);
+        let mut m = pre * local;
+        let mut origin = origin;
+        let mut angle = angle;
+        if self.vertical {
+            let writing = Affine::new([0.0, 1.0, -1.0, 0.0, 0.0, 0.0]);
+            if self.on_path {
+                // Vertical path type keeps the baseline path and turns each glyph across it.
+                m = Affine::translate(origin.to_vec2()) * Affine::rotate(std::f64::consts::FRAC_PI_2) * Affine::translate(-origin.to_vec2()) * m;
+            } else {
+                let physical = writing * origin;
+                let upright = matches!(g.ch as u32, 0x3000..=0x30ff | 0x3400..=0x9fff | 0xf900..=0xfaff | 0xfe10..=0xfe4f | 0xff01..=0xff60 | 0x20000..=0x3134f);
+                m = if upright { Affine::translate((physical - origin) + Vec2::new(-g.descent, g.ascent)) * m } else { writing * m };
+                origin = physical;
+                angle += std::f64::consts::FRAC_PI_2;
+            }
+        }
+        // Control characters (tabs) and soft hyphens draw nothing (fonts map them to .notdef).
+        let outline = if src.elements().is_empty() || g.is_soft_hyphen() || g.ch.is_control() {
+            BezPath::new()
+        } else {
+            let mut p = BezPath::with_capacity(src.elements().len());
+            for el in src.elements() {
+                p.push(m * *el);
+            }
+            p
+        };
+        let font_id = g.face.id();
+        self.out.glyphs.push(PositionedGlyph {
+            outline,
+            run: g.run,
+            byte: g.byte,
+            origin,
+            advance,
+            len: g.len,
+            angle,
+            line,
+            font_id,
+            gid: g.gid,
+            xf: m,
+        });
+    }
+}
+
+/// Lay out a text object into text-space glyph outlines (default [`LayoutOptions`]).
+pub fn layout(db: &FontDb, t: &TextObject) -> TextLayout {
+    let a = &t.area;
+    let opts = LayoutOptions {
+        rows: a.rows,
+        columns: a.columns,
+        gutter: a.gutter,
+        inset: a.inset,
+        first_baseline: a.first_baseline,
+        first_baseline_min: a.first_baseline_min,
+        ..LayoutOptions::default()
+    };
+    layout_with(db, t, &opts)
+}
+
+/// Lay out a text object with explicit options (area type rows/columns, inset, first baseline,
+/// composer, OpenType features).
+pub fn layout_with(db: &FontDb, t: &TextObject, opts: &LayoutOptions) -> TextLayout {
+    let text = t.plain_text();
+    let mut runs = Vec::with_capacity(t.runs.len());
+    let mut off = 0;
+    for r in &t.runs {
+        runs.push((off..off + r.text.len(), &r.style));
+        off += r.text.len();
+    }
+    let mut paras = Vec::new();
+    let mut s = 0;
+    for (i, c) in text.char_indices() {
+        if c == '\n' {
+            paras.push(s..i);
+            s = i + 1;
+        }
+    }
+    paras.push(s..text.len());
+    let mut vertical_opts = opts.clone();
+    vertical_opts.features.vertical = t.vertical;
+    let opts = &vertical_opts;
+    let is_on_path = matches!(&t.kind, TextKind::OnPath { .. });
+    let mut cx = Ctx {
+        vertical: t.vertical,
+        on_path: is_on_path,
+        db,
+        text: &text,
+        runs,
+        default: CharStyle::default(),
+        opts,
+        out: TextLayout { vertical: t.vertical && !is_on_path, ..Default::default() },
+    };
+    match &t.kind {
+        TextKind::Point => flow(&mut cx, &paras, &t.para, None),
+        TextKind::Area { frame } => {
+            let inverse = Affine::new([0.0, -1.0, 1.0, 0.0, 0.0, 0.0]);
+            let frame = if t.vertical { frame.transformed(inverse) } else { frame.clone() };
+            let mut wrap = t.wrap.clone();
+            if t.vertical {
+                for w in &mut wrap {
+                    w.path.transform(inverse);
+                }
+            }
+            let regions = Region::cells(&frame.to_bezpath(), opts, &wrap);
+            cx.out.frames = regions.iter().map(|r| r.cell).collect();
+            flow(&mut cx, &paras, &t.para, Some(&regions));
+        }
+        TextKind::OnPath { path, start } => on_path(&mut cx, &paras, &t.para, &path.to_bezpath(), *start, path.is_closed(), t.path_effect),
+    }
+    if cx.out.vertical {
+        let writing = Affine::new([0.0, 1.0, -1.0, 0.0, 0.0, 0.0]);
+        for frame in &mut cx.out.frames {
+            *frame = writing.transform_rect_bbox(*frame);
+        }
+    }
+    finish_bounds(&mut cx.out);
+    cx.out
+}
+
+fn finish_bounds(out: &mut TextLayout) {
+    let mut b: Option<Rect> = None;
+    let mut add = |r: Rect| b = Some(b.map_or(r, |b| b.union(r)));
+    for g in &out.glyphs {
+        if !g.outline.elements().is_empty() {
+            add(g.outline.bounding_box());
+        }
+    }
+    if !out.on_path {
+        for l in &out.lines {
+            let r = Rect::new(l.x0.min(l.x1), l.baseline - l.ascent, l.x0.max(l.x1), l.baseline + l.descent);
+            add(if out.vertical { Affine::new([0.0, 1.0, -1.0, 0.0, 0.0, 0.0]).transform_rect_bbox(r) } else { r });
+        }
+    }
+    out.bounds = b.unwrap_or_default();
+}
+
+/// One cell of a flattened area-type frame (the whole frame, or one row/column of it).
+struct Region {
+    /// The cell (frame bounds, or a grid cell of them).
+    cell: Rect,
+    /// Inset applied inside the frame edges.
+    inset: f64,
+    polys: Vec<Vec<Point>>,
+    /// The frame is its own bounding rectangle (spans need no polygon intersection).
+    rect: bool,
+    /// Text Wrap shapes: (polygons, offset, invert).
+    wraps: Vec<(Vec<Vec<Point>>, f64, bool)>,
+}
+
+/// Flattened closed polygons of a path.
+fn polygons(path: &BezPath) -> Vec<Vec<Point>> {
+    let mut polys: Vec<Vec<Point>> = Vec::new();
+    kurbo::flatten(path, 0.1, |el| match el {
+        PathEl::MoveTo(p) => polys.push(vec![p]),
+        PathEl::LineTo(p) => {
+            if let Some(v) = polys.last_mut() {
+                v.push(p);
+            }
+        }
+        _ => {}
+    });
+    polys.retain(|p| p.len() >= 3);
+    polys
+}
+
+/// Inside intervals (even-odd) of the horizontal line at `y` through `polys`.
+fn poly_intervals(polys: &[Vec<Point>], y: f64) -> Vec<(f64, f64)> {
+    let mut xs = Vec::new();
+    for poly in polys {
+        for i in 0..poly.len() {
+            let a = poly[i];
+            let b = poly[(i + 1) % poly.len()];
+            if (a.y <= y) != (b.y <= y) {
+                xs.push(a.x + (y - a.y) / (b.y - a.y) * (b.x - a.x));
+            }
+        }
+    }
+    xs.sort_by(f64::total_cmp);
+    xs.as_chunks::<2>().0.iter().map(|c| (c[0], c[1])).collect()
+}
+
+/// Union of sorted-or-not intervals.
+fn union_intervals(mut v: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
+    v.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut out: Vec<(f64, f64)> = Vec::with_capacity(v.len());
+    for (a, b) in v {
+        match out.last_mut() {
+            Some(l) if a <= l.1 => l.1 = l.1.max(b),
+            _ => out.push((a, b)),
+        }
+    }
+    out
+}
+
+/// `a` minus `b` (both unions of disjoint intervals).
+fn subtract_intervals(a: &[(f64, f64)], b: &[(f64, f64)]) -> Vec<(f64, f64)> {
+    let mut out = vec![];
+    for &(mut s, e) in a {
+        for &(c, d) in b {
+            if d <= s || c >= e {
+                continue;
+            }
+            if c > s {
+                out.push((s, c));
+            }
+            s = s.max(d);
+        }
+        if e > s {
+            out.push((s, e));
+        }
+    }
+    out
+}
+
+/// `a` ∩ `b`.
+fn intersect_intervals(a: &[(f64, f64)], b: &[(f64, f64)]) -> Vec<(f64, f64)> {
+    let mut out = vec![];
+    for &(s, e) in a {
+        for &(c, d) in b {
+            let (x, y) = (s.max(c), e.min(d));
+            if y > x {
+                out.push((x, y));
+            }
+        }
+    }
+    out
+}
+
+impl Region {
+    fn cells(path: &BezPath, opts: &LayoutOptions, wrap: &[vectorcraft_doc::WrapShape]) -> Vec<Region> {
+        let polys = polygons(path);
+        let wraps: Vec<(Vec<Vec<Point>>, f64, bool)> =
+            wrap.iter().map(|w| (polygons(&w.path.to_bezpath()), w.wrap.offset.max(0.0), w.wrap.invert)).filter(|w| !w.0.is_empty()).collect();
+        let bbox = path.bounding_box();
+        let rect = polys.len() == 1 && {
+            let area: f64 = polys[0].iter().zip(polys[0].iter().cycle().skip(1)).map(|(a, b)| a.x * b.y - b.x * a.y).sum::<f64>().abs() * 0.5;
+            (area - bbox.area()).abs() <= bbox.area() * 1e-6 + 1e-9
+        };
+        let (rows, cols) = (opts.rows.max(1), opts.columns.max(1));
+        let gutter = opts.gutter.max(0.0);
+        let cw = ((bbox.width() - gutter * (cols - 1) as f64) / cols as f64).max(0.0);
+        let rh = ((bbox.height() - gutter * (rows - 1) as f64) / rows as f64).max(0.0);
+        let mut out = Vec::with_capacity(rows * cols);
+        // Text flows down each column, then across (Illustrator's default "by columns").
+        for c in 0..cols {
+            for r in 0..rows {
+                let x0 = bbox.x0 + c as f64 * (cw + gutter);
+                let y0 = bbox.y0 + r as f64 * (rh + gutter);
+                let cell = if rows * cols == 1 { bbox } else { Rect::new(x0, y0, x0 + cw, y0 + rh) };
+                out.push(Region { cell, inset: opts.inset.max(0.0), polys: polys.clone(), rect, wraps: wraps.clone() });
+            }
+        }
+        out
+    }
+
+    fn top(&self) -> f64 {
+        self.cell.y0 + self.inset
+    }
+    fn bottom(&self) -> f64 {
+        self.cell.y1 - self.inset
+    }
+
+    /// Inside intervals (even-odd) of the horizontal line at `y`, minus the wrap objects (or
+    /// inside them, for Invert Wrap). Offsets grow each wrap shape vertically and horizontally.
+    fn intervals(&self, y: f64) -> Vec<(f64, f64)> {
+        let mut iv = if self.polys.is_empty() || self.rect { vec![(self.cell.x0, self.cell.x1)] } else { poly_intervals(&self.polys, y) };
+        for (polys, off, invert) in &self.wraps {
+            let ys = if *off > 0.0 { vec![y - off, y - off * 0.5, y, y + off * 0.5, y + off] } else { vec![y] };
+            let w = union_intervals(ys.into_iter().flat_map(|y| poly_intervals(polys, y)).map(|(a, b)| (a - off, b + off)).collect());
+            iv = if *invert { intersect_intervals(&iv, &w) } else { subtract_intervals(&iv, &w) };
+        }
+        iv
+    }
+
+    /// Widest horizontal span inside the frame (and the cell) over the band `top..bottom`.
+    fn span(&self, top: f64, bottom: f64) -> Option<(f64, f64)> {
+        self.spans(top, bottom).into_iter().max_by(|x, y| (x.1 - x.0).total_cmp(&(y.1 - y.0)))
+    }
+
+    /// Every horizontal span inside the frame (and the cell) over the band `top..bottom`, left to
+    /// right (text wraps on both sides of an object).
+    fn spans(&self, top: f64, bottom: f64) -> Vec<(f64, f64)> {
+        let clip = |(a, b): (f64, f64)| {
+            let (a, b) = (a.max(self.cell.x0) + self.inset, b.min(self.cell.x1) - self.inset);
+            (b > a).then_some((a, b))
+        };
+        let plain = self.polys.is_empty() || self.rect;
+        if plain && self.wraps.is_empty() {
+            return (self.cell.width() > 0.0).then_some((self.cell.x0, self.cell.x1)).and_then(clip).into_iter().collect();
+        }
+        let fb = if plain {
+            self.cell
+        } else {
+            self.polys.iter().flatten().fold(Rect::new(f64::MAX, f64::MAX, f64::MIN, f64::MIN), |r, p| r.union_pt(*p))
+        };
+        let clamp = |y: f64| if plain { y } else { y.clamp(fb.y0 + 1e-4, fb.y1 - 1e-4) };
+        // Sample the band densely enough for curved frames (circles, blobs).
+        let samples = 5;
+        let mut rows: Vec<Vec<(f64, f64)>> =
+            (0..samples).map(|k| self.intervals(clamp(top + (bottom - top) * k as f64 / (samples - 1) as f64))).collect();
+        let mid = rows.swap_remove(samples / 2);
+        if !self.wraps.is_empty() {
+            // Wrap objects split lines: keep exactly what is free on every sampled row.
+            let free = rows.iter().fold(mid, |acc, r| intersect_intervals(&acc, r));
+            return free.into_iter().filter_map(clip).collect();
+        }
+        mid.into_iter()
+            .filter_map(|(mut a, mut b)| {
+                for o in &rows {
+                    let best =
+                        o.iter().map(|&(c, d)| (a.max(c), b.min(d))).filter(|(c, d)| d > c).max_by(|x, y| (x.1 - x.0).total_cmp(&(y.1 - y.0)))?;
+                    a = best.0;
+                    b = best.1;
+                }
+                clip((a, b))
+            })
+            .collect()
+    }
+}
+
+/// Vertical metrics of a line: (ascent, descent, leading, cap height, x height).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Metrics {
+    asc: f64,
+    desc: f64,
+    lead: f64,
+    cap: f64,
+    xh: f64,
+}
+
+impl Metrics {
+    fn of(g: &SGlyph) -> Self {
+        Self { asc: g.ascent, desc: g.descent, lead: g.leading, cap: g.cap, xh: g.xh }
+    }
+    fn max(g: &[SGlyph]) -> Option<Self> {
+        let mut it = g.iter();
+        let first = Self::of(it.next()?);
+        Some(it.fold(first, |m, g| Self {
+            asc: m.asc.max(g.ascent),
+            desc: m.desc.max(g.descent),
+            lead: m.lead.max(g.leading),
+            cap: m.cap.max(g.cap),
+            xh: m.xh.max(g.xh),
+        }))
+    }
+    /// Distance from the frame top to the first baseline.
+    fn first_baseline(&self, fb: FirstBaseline, min: f64) -> f64 {
+        let v = match fb {
+            FirstBaseline::Ascent => self.asc,
+            FirstBaseline::CapHeight => self.cap,
+            FirstBaseline::XHeight => self.xh,
+            FirstBaseline::Leading => self.lead,
+            FirstBaseline::Fixed => 0.0,
+        };
+        v.max(min)
+    }
+}
+
+/// Where the next line goes: the region being filled and the previous baseline in it.
+#[derive(Clone)]
+struct Pen<'r> {
+    regions: Option<&'r [Region]>,
+    ri: usize,
+    prev: Option<f64>,
+    pending: f64,
+    fb: FirstBaseline,
+    fb_min: f64,
+    /// Further spans at the current baseline (text wrapping on both sides of an object).
+    queued: Vec<(f64, f64, f64)>,
+}
+
+impl Pen<'_> {
+    /// Baseline and horizontal span for a line with estimated metrics `est` and indents; `None` =
+    /// the frame is full (overflow).
+    /// The `bool` is true for a further span at the previous line's baseline.
+    fn place(&mut self, est: Metrics, ind_l: f64, ind_r: f64) -> Option<(f64, f64, f64, bool)> {
+        let Some(regions) = self.regions else {
+            let b = self.prev.map_or(0.0, |b| b + est.lead + self.pending);
+            return Some((b, f64::NEG_INFINITY, f64::INFINITY, false));
+        };
+        if !self.queued.is_empty() {
+            let (b, x0, x1) = self.queued.remove(0);
+            return Some((b, x0, x1, true));
+        }
+        loop {
+            let r = regions.get(self.ri)?;
+            let mut baseline = match self.prev {
+                None => r.top() + est.first_baseline(self.fb, self.fb_min),
+                Some(b) => b + est.lead + self.pending,
+            };
+            loop {
+                if baseline + est.desc > r.bottom() + 0.01 {
+                    break;
+                }
+                let fits = |&(a, b): &(f64, f64)| b - a - ind_l - ind_r > est.asc.max(1.0);
+                if r.wraps.is_empty() {
+                    match r.span(baseline - est.asc, baseline + est.desc) {
+                        Some(s) if fits(&s) => return Some((baseline, s.0, s.1, false)),
+                        _ => baseline += est.lead.max(1.0),
+                    }
+                } else {
+                    // Wrap objects can split a line: fill every span, left to right.
+                    let mut spans: Vec<(f64, f64)> = r.spans(baseline - est.asc, baseline + est.desc).into_iter().filter(fits).collect();
+                    if spans.is_empty() {
+                        baseline += est.lead.max(1.0);
+                        continue;
+                    }
+                    let (a, b) = spans.remove(0);
+                    self.queued = spans.into_iter().map(|(a, b)| (baseline, a, b)).collect();
+                    return Some((baseline, a, b, false));
+                }
+            }
+            // Next row/column.
+            self.ri += 1;
+            self.prev = None;
+            self.pending = 0.0;
+            self.queued.clear();
+        }
+    }
+    fn bottom(&self) -> f64 {
+        self.regions.and_then(|r| r.get(self.ri)).map_or(f64::INFINITY, |r| r.bottom())
+    }
+}
+
+/// Advance of a tab at pen position `x`: up to the next stop after it (explicit stops first, then
+/// every ½ inch). Right, centre and decimal stops align the text that follows (`rest`, up to the
+/// next tab) on the stop.
+fn tab_advance(tabs: &[vectorcraft_doc::TabStop], origin: f64, x: f64, rest: &[SGlyph]) -> f64 {
+    use vectorcraft_doc::TabAlign;
+    let rel = x - origin;
+    let seg: Vec<&SGlyph> = rest.iter().take_while(|g| g.ch != '\t').collect();
+    let width: f64 = seg.iter().map(|g| g.adv).sum();
+    let target = |pos: f64, align: TabAlign, on: char| match align {
+        TabAlign::Left => pos,
+        TabAlign::Right => pos - width,
+        TabAlign::Center => pos - width / 2.0,
+        TabAlign::Decimal => pos - seg.iter().take_while(|g| g.ch != on).map(|g| g.adv).sum::<f64>(),
+    };
+    let explicit = tabs.iter().find_map(|t| {
+        let at = target(t.position, t.align, t.align_on);
+        (at > rel + 1e-6).then_some(at)
+    });
+    let at = explicit.unwrap_or_else(|| {
+        let last = tabs.iter().map(|t| t.position).fold(0.0, f64::max).max(0.0);
+        let base = rel.max(last);
+        ((base / vectorcraft_doc::text::DEFAULT_TAB_INTERVAL).floor() + 1.0) * vectorcraft_doc::text::DEFAULT_TAB_INTERVAL
+    });
+    (at - rel).max(0.0)
+}
+
+/// Greedy break: returns (end glyph index, hyphenated) for a line starting at `i` of `width`.
+fn break_line(text: &str, g: &[SGlyph], i: usize, width: f64, hyphenate: bool) -> (usize, bool) {
+    if !width.is_finite() {
+        return (g.len(), false);
+    }
+    let mut x = 0.0;
+    let mut last_break: Option<(usize, bool)> = None;
+    let mut j = i;
+    while j < g.len() {
+        let gl = &g[j];
+        if j > i && !gl.is_space() && x + gl.adv > width + EPS {
+            break;
+        }
+        x += gl.adv;
+        if gl.break_after() {
+            if gl.is_soft_hyphen() {
+                if x + hyphen_glyph(gl).adv <= width + EPS {
+                    last_break = Some((j + 1, true));
+                }
+            } else {
+                last_break = Some((j + 1, false));
+            }
+        }
+        j += 1;
+    }
+    if j >= g.len() {
+        return (g.len(), false);
+    }
+    // Hyphenate the word that overflows.
+    let word_start = last_break.map_or(i, |b| b.0);
+    if hyphenate && g[j].is_letter() {
+        let mut we = j;
+        while we < g.len() && !g[we].is_space() && !g[we].break_after() {
+            we += 1;
+        }
+        let x_ws: f64 = g[i..word_start].iter().map(|g| g.adv).sum();
+        let pts = hyphen_breaks(text, g, word_start, we);
+        for &k in pts.iter().rev() {
+            if k <= j && k > i {
+                let w = x_ws + g[word_start..k].iter().map(|g| g.adv).sum::<f64>() + hyphen_glyph(&g[k - 1]).adv;
+                if w <= width + EPS {
+                    return (k, true);
+                }
+            }
+        }
+    }
+    // Don't separate a cluster's glyphs.
+    let (mut end, hy) = match last_break {
+        Some(b) if b.0 > i => b,
+        _ => (j, false),
+    };
+    while end > i + 1 && end < g.len() && g[end].byte == g[end - 1].byte {
+        end -= 1;
+    }
+    (end, hy)
+}
+
+/// Glyph indices inside `g[ws..we]` (a word) where a hyphenated break may go.
+fn hyphen_breaks(text: &str, g: &[SGlyph], ws: usize, we: usize) -> Vec<usize> {
+    // Strip leading/trailing punctuation (quotes, commas).
+    let (mut a, mut b) = (ws, we);
+    while a < b && !g[a].is_letter() {
+        a += 1;
+    }
+    while b > a && !g[b - 1].is_letter() {
+        b -= 1;
+    }
+    if b <= a || g[a..b].iter().any(|g| !g.is_letter()) {
+        return vec![];
+    }
+    let (s, e) = (g[a].byte, g[b - 1].byte + g[b - 1].len);
+    let Some(word) = text.get(s..e) else { return vec![] };
+    let offs: Vec<usize> = word.char_indices().map(|(o, _)| s + o).collect();
+    hyphen_points(word)
+        .into_iter()
+        .filter_map(|ci| {
+            let byte = *offs.get(ci)?;
+            // Only at cluster starts (not inside a ligature).
+            (a + 1..b).find(|&k| g[k].byte == byte && g[k - 1].byte != byte)
+        })
+        .collect()
+}
+
+/// Break candidates for the every-line composer.
+fn candidates(text: &str, g: &[SGlyph], hyphenate: bool) -> Vec<Breakpoint> {
+    let mut v = vec![];
+    let mut ws = 0;
+    for (j, gl) in g.iter().enumerate() {
+        let end_of_word = gl.is_space() || gl.break_after();
+        if end_of_word {
+            if hyphenate && j > ws {
+                for k in hyphen_breaks(text, g, ws, j) {
+                    v.push(Breakpoint { end: k, hyphen: hyphen_glyph(&g[k - 1]).adv });
+                }
+            }
+            let hy = if gl.is_soft_hyphen() { hyphen_glyph(gl).adv } else { 0.0 };
+            if j + 1 < g.len() && g[j + 1].byte != gl.byte {
+                v.push(Breakpoint { end: j + 1, hyphen: hy });
+            }
+            ws = j + 1;
+        }
+    }
+    if hyphenate && g.len() > ws {
+        for k in hyphen_breaks(text, g, ws, g.len()) {
+            v.push(Breakpoint { end: k, hyphen: hyphen_glyph(&g[k - 1]).adv });
+        }
+    }
+    v.sort_by_key(|b| b.end);
+    v.dedup_by_key(|b| b.end);
+    v
+}
+
+/// Every-line composition of paragraph glyphs `sg` if applicable (justified area text with uniform
+/// line metrics); `None` falls back to the greedy single-line composer.
+fn compose_para(cx: &Ctx<'_>, sg: &[SGlyph], para: &ParaStyle, pen: &Pen<'_>) -> Option<Vec<(usize, bool)>> {
+    let justified = !matches!(para.justify, Justify::Left | Justify::Center | Justify::Right);
+    if cx.opts.composer != Composer::EveryLine || !justified || pen.regions.is_none() || sg.len() < 2 {
+        return None;
+    }
+    let m = Metrics::of(&sg[0]);
+    if sg.iter().any(|g| Metrics::of(g) != m) {
+        return None;
+    }
+    // Line widths are independent of the breaks when every line has the same metrics.
+    let total: f64 = sg.iter().map(|g| g.adv).sum();
+    let mut sim = pen.clone();
+    let mut widths = vec![];
+    let mut acc = 0.0;
+    while widths.len() < sg.len() {
+        let first = widths.is_empty();
+        let ind_l = para.left_indent + if first { para.first_line_indent } else { 0.0 };
+        let Some((b, x0, x1, _)) = sim.place(m, ind_l, para.right_indent) else { break };
+        let w = x1 - x0 - ind_l - para.right_indent;
+        widths.push(w);
+        acc += w.max(1.0);
+        sim.prev = Some(b);
+        sim.pending = 0.0;
+        if acc > total * 1.6 + 4.0 * w.max(1.0) {
+            break;
+        }
+    }
+    let last = *widths.last()?;
+    let width = |k: usize| widths.get(k).copied().unwrap_or(last);
+    let cands = candidates(cx.text, sg, para.hyphenate);
+    let justify_last = para.justify == Justify::JustifyAll;
+    compose(sg, &width, &cands, justify_last, 1.0).or_else(|| compose(sg, &width, &cands, justify_last, 4.0))
+}
+
+fn flow(cx: &mut Ctx<'_>, paras: &[Range<usize>], para: &ParaStyle, regions: Option<&[Region]>) {
+    let mut pen = Pen { regions, ri: 0, prev: None, pending: 0.0, fb: cx.opts.first_baseline, fb_min: cx.opts.first_baseline_min, queued: vec![] };
+    'paras: for (pi, pr) in paras.iter().enumerate() {
+        let sg = cx.shape_para(pr.clone());
+        let pm = {
+            let (asc, desc, lead) = style_metrics(cx.db, cx.style_at(pr.start));
+            let (cap, xh) = cap_x_heights(cx.db, cx.style_at(pr.start));
+            Metrics { asc, desc, lead, cap, xh }
+        };
+        if pi > 0 {
+            pen.pending += para.space_before;
+        }
+        let n = sg.len();
+        let composed = compose_para(cx, &sg, para, &pen);
+        let mut li_para = 0;
+        let mut i = 0;
+        loop {
+            let est = if i < n { Metrics::of(&sg[i]) } else { pm };
+            let first_line = li_para == 0;
+            let ind_l = para.left_indent + if first_line { para.first_line_indent } else { 0.0 };
+            // Place, break, then settle the baseline on the line's real metrics (moving on to the
+            // next row/column if it no longer fits).
+            let (baseline, x0, x1, end, hyph, m) = loop {
+                let first_in_region = pen.prev.is_none();
+                let Some((mut baseline, x0, x1, same_baseline)) = pen.place(est, ind_l, para.right_indent) else {
+                    cx.out.overflow = cx.text.len() > if i < n { sg[i].byte } else { pr.start };
+                    break 'paras;
+                };
+                let width = x1 - x0 - ind_l - para.right_indent;
+                let (end, hyph) = match composed.as_ref().and_then(|c| c.get(li_para)) {
+                    Some(&(e, h)) if e > i => (e, h),
+                    _ if i < n => break_line(cx.text, &sg, i, width, para.hyphenate),
+                    _ => (n, false),
+                };
+                let m = Metrics::max(&sg[i..end]).unwrap_or(pm);
+                baseline += if same_baseline || (pen.regions.is_none() && first_in_region) {
+                    0.0
+                } else if first_in_region {
+                    m.first_baseline(pen.fb, pen.fb_min) - est.first_baseline(pen.fb, pen.fb_min)
+                } else {
+                    m.lead - est.lead
+                };
+                if pen.regions.is_some() && baseline + m.desc > pen.bottom() + 0.01 {
+                    // Try the next row/column; overflow if there is none.
+                    pen.ri += 1;
+                    pen.prev = None;
+                    pen.pending = 0.0;
+                    pen.queued.clear();
+                    continue;
+                }
+                break (baseline, x0, x1, end, hyph, m);
+            };
+            let (ax0, ax1) = if regions.is_some() { (x0 + ind_l, x1 - para.right_indent) } else { (x0, x1) };
+            let width = ax1 - ax0;
+            pen.pending = 0.0;
+            let last_of_para = end >= n;
+            let mut trimmed = end;
+            while trimmed > i && sg[trimmed - 1].is_space() {
+                trimmed -= 1;
+            }
+            let hyphen = (hyph && end > i).then(|| hyphen_glyph(&sg[end - 1]));
+            let w: f64 = sg[i..trimmed].iter().map(|g| g.adv).sum::<f64>() + hyphen.as_ref().map_or(0.0, |h| h.adv);
+            let (align, justify) = match para.justify {
+                Justify::Left => (0, false),
+                Justify::Center => (1, false),
+                Justify::Right => (2, false),
+                Justify::JustifyLeft => (0, !last_of_para),
+                Justify::JustifyCenter => (1, !last_of_para),
+                Justify::JustifyRight => (2, !last_of_para),
+                Justify::JustifyAll => (0, true),
+            };
+            let justify = justify && regions.is_some();
+            let (mut per_space, mut per_gap) = (0.0, 0.0);
+            let spaces = sg[i..trimmed].iter().filter(|g| g.is_space()).count();
+            if justify && (width - w).abs() > EPS {
+                if spaces > 0 {
+                    // Composed lines may shrink word spaces (never below zero).
+                    per_space =
+                        ((width - w) / spaces as f64).max(-sg[i..trimmed].iter().filter(|g| g.is_space()).map(|g| g.adv).fold(f64::MAX, f64::min));
+                } else if para.justify == Justify::JustifyAll && trimmed - i > 1 && width > w {
+                    per_gap = (width - w) / (trimmed - i - 1) as f64;
+                }
+            }
+            let start_x = if justify {
+                ax0
+            } else if regions.is_none() {
+                match align {
+                    0 => ind_l,
+                    1 => (ind_l - para.right_indent - w) * 0.5,
+                    _ => -para.right_indent - w,
+                }
+            } else {
+                match align {
+                    0 => ax0,
+                    1 => ax0 + (width - w) * 0.5,
+                    _ => ax1 - w,
+                }
+            };
+            let li = cx.out.lines.len();
+            let glyph_start = cx.out.glyphs.len();
+            let mut x = start_x;
+            let mut x_end = start_x;
+            // Tab stops are measured from the frame's left edge (point type: the origin).
+            let tab_origin = if regions.is_some() { x0 } else { 0.0 };
+            for (j, g) in sg.iter().enumerate().take(end).skip(i) {
+                let mut adv = g.adv;
+                if g.ch == '\t' {
+                    adv = tab_advance(&para.tabs, tab_origin, x, &sg[j + 1..trimmed.max(j + 1)]);
+                } else if j < trimmed {
+                    if g.is_space() {
+                        adv += per_space;
+                    } else if j + 1 < trimmed {
+                        adv += per_gap;
+                    }
+                }
+                cx.emit(g, Affine::translate((x, baseline)), Point::new(x, baseline), 0.0, adv, li);
+                x += adv;
+                if j + 1 == trimmed {
+                    x_end = x;
+                }
+            }
+            if let Some(h) = &hyphen {
+                // The hyphen follows the last non-space glyph.
+                let hx = x_end;
+                cx.emit(h, Affine::translate((hx, baseline)), Point::new(hx, baseline), 0.0, h.adv, li);
+                x_end = hx + h.adv;
+            }
+            cx.out.lines.push(LineInfo {
+                baseline,
+                x0: start_x,
+                x1: x_end,
+                ascent: m.asc,
+                descent: m.desc,
+                start: if i < n { sg[i].byte } else { pr.start },
+                end: if last_of_para { pr.end } else { sg[end].byte },
+                glyph_start,
+                glyph_end: cx.out.glyphs.len(),
+                avail: if regions.is_some() { (ax0, ax1) } else { (start_x, x_end) },
+            });
+            pen.prev = Some(baseline);
+            // Further spans of this line band share the settled baseline.
+            for q in &mut pen.queued {
+                q.0 = baseline;
+            }
+            li_para += 1;
+            i = end;
+            if i >= n {
+                break;
+            }
+        }
+        pen.pending += para.space_after;
+    }
+}
+
+/// Arc-length parameterised path.
+struct ArcPath {
+    segs: Vec<(PathSeg, f64, f64)>,
+    len: f64,
+}
+
+impl ArcPath {
+    fn new(p: &BezPath) -> Self {
+        let mut segs = Vec::new();
+        let mut cum = 0.0;
+        for s in p.segments() {
+            let l = s.arclen(1e-4);
+            if l > 1e-9 {
+                segs.push((s, cum, l));
+                cum += l;
+            }
+        }
+        Self { segs, len: cum }
+    }
+
+    /// Point and unit tangent at arc length `s`.
+    fn at(&self, s: f64) -> (Point, Vec2) {
+        let s = s.clamp(0.0, self.len);
+        let i = self.segs.partition_point(|(_, c, _)| *c <= s).saturating_sub(1);
+        let (seg, c, l) = self.segs[i];
+        let t = seg.inv_arclen((s - c).min(l), 1e-4).clamp(0.0, 1.0);
+        let p = seg.eval(t);
+        let (t0, t1) = ((t - 1e-4).max(0.0), (t + 1e-4).min(1.0));
+        let d = seg.eval(t1) - seg.eval(t0);
+        let len = d.hypot();
+        (p, if len > 1e-12 { d / len } else { Vec2::new(1.0, 0.0) })
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn on_path(cx: &mut Ctx<'_>, paras: &[Range<usize>], para: &ParaStyle, path: &BezPath, start: f64, closed: bool, effect: PathEffect) {
+    cx.out.on_path = true;
+    let mut sg = Vec::new();
+    for pr in paras {
+        sg.extend(cx.shape_para(pr.clone()));
+    }
+    let ap = ArcPath::new(path);
+    let m = Metrics::max(&sg).map(|m| (m.asc, m.desc)).unwrap_or_else(|| {
+        let s = style_metrics(cx.db, cx.style_at(0));
+        (s.0, s.1)
+    });
+    let text_len = cx.text.len();
+    if ap.segs.is_empty() {
+        cx.out.overflow = !sg.is_empty();
+        cx.out.lines.push(LineInfo {
+            baseline: 0.0,
+            x0: 0.0,
+            x1: 0.0,
+            ascent: m.0,
+            descent: m.1,
+            start: 0,
+            end: text_len,
+            glyph_start: 0,
+            glyph_end: 0,
+            avail: (0.0, 0.0),
+        });
+        return;
+    }
+    let centre = path.bounding_box().center();
+    let s_start = start.clamp(0.0, 1.0) * ap.len;
+    let avail = if closed { ap.len } else { ap.len - s_start };
+    let w: f64 = sg.iter().map(|g| g.adv).sum();
+    let s0 = match para.justify {
+        Justify::Center | Justify::JustifyCenter => s_start + ((avail - w) * 0.5).max(0.0),
+        Justify::Right | Justify::JustifyRight => s_start + (avail - w).max(0.0),
+        _ => s_start,
+    };
+    let mut x = 0.0;
+    for g in &sg {
+        let s = s0 + x;
+        if s + g.adv - s_start > avail + 1e-6 {
+            cx.out.overflow = true;
+            break;
+        }
+        let mut mid = s + g.adv * 0.5;
+        if closed {
+            mid = mid.rem_euclid(ap.len);
+        }
+        let (p, dir) = ap.at(mid);
+        let angle = dir.y.atan2(dir.x);
+        let half = Affine::translate((-g.adv * 0.5, 0.0));
+        // Glyph space: x along the advance, y down from the baseline; `pre` maps it onto the path.
+        let pre = match effect {
+            PathEffect::Rainbow => Affine::translate(p.to_vec2()) * Affine::rotate(angle) * half,
+            // x axis along the tangent, y axis stays vertical.
+            PathEffect::Skew => Affine::translate(p.to_vec2()) * Affine::new([dir.x, dir.y, 0.0, 1.0, 0.0, 0.0]) * half,
+            // x axis stays horizontal (facing the path's direction), y axis perpendicular to the path.
+            PathEffect::Ribbon3d => {
+                let sx = if dir.x < 0.0 { -1.0 } else { 1.0 };
+                Affine::translate(p.to_vec2()) * Affine::new([sx, 0.0, -dir.y * sx, dir.x * sx, 0.0, 0.0]) * half
+            }
+            PathEffect::StairStep => {
+                let s_left = if closed { s.rem_euclid(ap.len) } else { s };
+                Affine::translate(ap.at(s_left).0.to_vec2())
+            }
+            // x axis along the tangent; vertical edges point at the path's centre (kept on the glyph's
+            // up side, and never closer than ~17° to the baseline so glyphs stay legible).
+            PathEffect::Gravity => {
+                let n = Vec2::new(dir.y, -dir.x);
+                let mut up = p - centre;
+                up = if up.hypot() < 1e-9 { n } else { up / up.hypot() };
+                if up.dot(n) < 0.0 {
+                    up = -up;
+                }
+                if up.dot(n) < 0.3 {
+                    let t = up - n * up.dot(n);
+                    up = n * 0.3 + t / t.hypot().max(1e-9) * (1.0 - 0.09f64).sqrt();
+                }
+                Affine::translate(p.to_vec2()) * Affine::new([dir.x, dir.y, -up.x, -up.y, 0.0, 0.0]) * half
+            }
+        };
+        cx.emit(g, pre, p - dir * (g.adv * 0.5), angle, g.adv, 0);
+        x += g.adv;
+    }
+    let (ps, _) = ap.at(if closed { s0.rem_euclid(ap.len) } else { s0 });
+    let (pe, _) = ap.at(if closed { (s0 + x).rem_euclid(ap.len) } else { s0 + x });
+    cx.out.lines.push(LineInfo {
+        baseline: ps.y,
+        x0: ps.x,
+        x1: pe.x,
+        ascent: m.0,
+        descent: m.1,
+        start: 0,
+        end: text_len,
+        glyph_start: 0,
+        glyph_end: cx.out.glyphs.len(),
+        avail: (0.0, ap.len),
+    });
+}

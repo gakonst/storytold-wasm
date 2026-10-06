@@ -1,0 +1,83 @@
+[workspace]
+resolver = "3"
+members = ["apps/printcraft-worker", "crates/a11y", "crates/annot", "crates/automation", "crates/compare", "crates/content", "crates/cos", "crates/create", "crates/crypt", "crates/edit", "crates/engine", "crates/export", "crates/filters", "crates/fonts", "crates/forms", "crates/js", "crates/model", "crates/ocr", "crates/optimize", "crates/organize", "crates/preflight", "crates/print", "crates/redact", "crates/render", "crates/sign", "crates/xfdf"]
+exclude = ["vendor"]
+default-members = ["apps/printcraft-worker"]
+
+[workspace.package]
+version = "0.2.1"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.90"
+repository = "https://github.com/storytold/printcraft"
+
+[workspace.dependencies]
+# internal
+printcraft-filters = { path = "crates/filters", version = "0.2.0" }
+printcraft-cos = { path = "crates/cos", version = "0.2.0" }
+printcraft-crypt = { path = "crates/crypt", version = "0.2.0" }
+printcraft-organize = { path = "crates/organize", version = "0.2.0" }
+printcraft-annot = { path = "crates/annot", version = "0.2.0" }
+printcraft-fonts = { path = "crates/fonts", version = "0.2.0" }
+printcraft-model = { path = "crates/model", version = "0.2.0" }
+printcraft-content = { path = "crates/content", version = "0.2.0" }
+printcraft-redact = { path = "crates/redact", version = "0.2.0" }
+printcraft-print = { path = "crates/print", version = "0.2.0" }
+printcraft-xfdf = { path = "crates/xfdf", version = "0.2.0" }
+printcraft-sign = { path = "crates/sign", version = "0.2.0" }
+printcraft-optimize = { path = "crates/optimize", version = "0.2.0" }
+printcraft-a11y = { path = "crates/a11y", version = "0.2.0" }
+printcraft-ocr = { path = "crates/ocr", version = "0.2.0" }
+printcraft-js = { path = "crates/js", version = "0.2.0" }
+printcraft-compare = { path = "crates/compare", version = "0.2.0" }
+printcraft-preflight = { path = "crates/preflight", version = "0.2.0" }
+printcraft-export = { path = "crates/export", version = "0.2.0" }
+printcraft-edit = { path = "crates/edit", version = "0.2.0" }
+printcraft-create = { path = "crates/create", version = "0.2.0" }
+printcraft-forms = { path = "crates/forms", version = "0.2.0" }
+printcraft-render = { path = "crates/render", version = "0.2.0" }
+printcraft-engine = { path = "crates/engine", version = "0.2.0" }
+printcraft-automation = { path = "crates/automation", version = "0.2.0", default-features = false }
+
+# pdf
+hayro = "0.7.1"
+hayro-syntax = "0.7.2"
+lopdf = "0.45"
+flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
+weezl = "0.2"
+
+# foundation
+thiserror = "2"
+serde_json = "1"
+log = "0.4"
+kurbo = "0.13"
+
+# testing
+proptest = "1"
+
+# ui
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+# Vendored, patched third-party crates (see vendor/README.md). Each patch is meant to go upstream.
+[patch.crates-io]
+hayro-interpret = { path = "vendor/hayro-interpret" }
+hayro = { path = "vendor/hayro" }
+hayro-syntax = { path = "vendor/hayro-syntax" }
+hayro-jbig2 = { path = "vendor/hayro-jbig2" }
+lopdf = { path = "vendor/lopdf" }

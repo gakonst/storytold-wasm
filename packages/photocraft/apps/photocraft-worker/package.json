@@ -1,0 +1,16 @@
+{
+  "name": "photocraft-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:wasm": "bash build.sh",
+    "build": "npm run build:wasm && wrangler deploy --dry-run --outdir dist",
+    "test": "node test/journey.mjs",
+    "deploy": "npm run build:wasm && wrangler deploy",
+    "dev": "wrangler dev"
+  },
+  "devDependencies": {
+    "wrangler": "4.147.0",
+    "miniflare": "4.20260210.0"
+  }
+}

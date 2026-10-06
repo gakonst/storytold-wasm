@@ -1,0 +1,16 @@
+{
+  "photocraft": {"package":"photocraft-worker","path":"packages/photocraft/apps/photocraft-worker","description":"Raster editing, color, composition, painting, PSD, image codecs and byte import/export"},
+  "lightcraft": {"package":"@storytold-wasm/lightcraft-worker","path":"packages/lightcraft/apps/lightcraft-worker","description":"Photo catalogues, development, metadata, presets and image export"},
+  "vectorcraft": {"package":"@storytold-wasm/vectorcraft-worker","path":"packages/vectorcraft/apps/vectorcraft-worker","description":"Vector document commands, geometry, rendering and byte import/export"},
+  "designcraft": {"package":"@storytold-wasm/designcraft-worker","path":"packages/designcraft/apps/designcraft-worker","description":"Page layout, typography, document commands and rendering"},
+  "filmcraft": {"package":"filmcraft-worker","path":"packages/filmcraft/apps/filmcraft-worker","description":"Timeline editing, CPU frame rendering, audio and portable media codecs"},
+  "effectcraft": {"package":"effectcraft-worker","path":"packages/effectcraft/apps/effectcraft-worker","description":"Composition, effects, expressions and CPU rendering"},
+  "printcraft": {"package":"printcraft-worker","path":"packages/printcraft/apps/printcraft-worker","description":"PDF editing, rendering, forms, encryption, signing and document export"},
+  "craft-fonts": {"package":"craft-fonts-wasm","path":"packages/craft-fonts/crates/craft-fonts-wasm","description":"Font catalogue, manifest parser and licensed font assets"},
+  "artcraftx": {"package":"artcraft-worker","path":"packages/artcraftx/apps/artcraft-worker","description":"Image conversion, thumbnails, hashes, base64, model metadata and data utilities"},
+  "cloud-worker": {"package":"@storytold/cloud-worker","path":"packages/cloud-worker","description":"ComfyUI graph construction and frame-length calculation"},
+  "onnx-inference": {"package":"@storytold/onnx-inference","path":"packages/onnx-inference","description":"CPU ONNX evaluation through the vendored Candle implementation"},
+  "point-generator": {"package":"@storytold-wasm/point-generator","path":"packages/point-generator","description":"Point generation and binary point encoding/decoding"},
+  "actor-spawning": {"package":"@storytold-wasm/actor-spawning","path":"packages/actor-spawning","description":"Actor location and randomized placement arithmetic"},
+  "kinect-geometry": {"package":"@storytold-wasm/kinect-geometry","path":"packages/kinect-geometry","description":"Recorded depth-frame point-cloud and mesh conversion"}
+}

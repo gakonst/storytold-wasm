@@ -1,0 +1,33 @@
+[workspace]
+resolver = "2"
+members = ["apps/artcraft-worker", "crates/lib/data/primitives", "crates/lib/data/web_base64", "crates/lib/errors", "crates/lib/files/file_hashing", "crates/lib/files/images", "crates/lib/files/mimetypes", "crates/lib/files/thumbnails", "crates/lib/jwt_light", "crates/lib/url_utils", "crates/models", "crates/testing/test_utils", "crates/workspace-build-acceleration"]
+default-members = ["apps/artcraft-worker"]
+[workspace.package]
+publish = false
+[workspace.dependencies]
+anyhow = "1.0.102"
+assertor = "0.0.3"
+base64 = "0.22.1"
+blake3 = "1.5"
+chrono = { version = "0.4.44", features = ["serde"] }
+errors = { path = "crates/lib/errors" }
+images = { path = "crates/lib/files/images" }
+log = "0.4.29"
+mimetypes = { path = "crates/lib/files/mimetypes" }
+mp4 = "0.14.0"
+once_cell = "1.21.4"
+openh264 = "0.8.0"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_derive = "1.0.228"
+serde_json = "1.0.149"
+strum = { version = "0.28.0", features = ["derive"] }
+tempfile = "3.27.0"
+test_utils = { path = "crates/testing/test_utils" }
+url = { version = "2.5.8", features = ["serde"] }
+webp-animation = "0.9.0"
+workspace-build-acceleration = { path = "crates/workspace-build-acceleration" }
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"

@@ -1,0 +1,23 @@
+{
+  "repository": "https://github.com/storytold/designcraft",
+  "source_commit": "e8d6cedfea0f68d0b3e8601f60398d42502db70d",
+  "worker_entry": "apps/designcraft-worker",
+  "included_crates": [
+    "apps/designcraft-worker",
+    "crates/color",
+    "crates/compose",
+    "crates/doc",
+    "crates/engine",
+    "crates/epub",
+    "crates/fonts",
+    "crates/format",
+    "crates/geom",
+    "crates/idml",
+    "crates/images",
+    "crates/pdf",
+    "crates/render",
+    "crates/textimport",
+    "crates/tools"
+  ],
+  "note": "Extracted WASM dependency closure; Worker adapters and portability changes are maintained in this repository."
+}

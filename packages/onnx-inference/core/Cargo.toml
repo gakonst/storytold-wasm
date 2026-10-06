@@ -1,0 +1,15 @@
+[package]
+name = "artcraft-onnx-wasm"
+version = "0.1.0"
+edition = "2021"
+[workspace]
+[lib]
+crate-type = ["cdylib", "rlib"]
+[dependencies]
+candle = { package = "candle-core", path = "../vendor/candle/candle-core" }
+candle-onnx = { path = "../vendor/candle/candle-onnx" }
+getrandom = { version = "0.2", features = ["js"] }
+half = "=2.4.1"
+prost = "0.12.1"
+safetensors = "0.4.1"
+wasm-bindgen = "=0.2.129"

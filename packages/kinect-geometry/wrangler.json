@@ -1,0 +1,5 @@
+{
+  "name": "azure-kinect-sample-for-unity-portable",
+  "main": "worker.mjs",
+  "compatibility_date": "2026-02-10"
+}

@@ -1,0 +1,14 @@
+{
+  "name": "storytold-point-generator",
+  "main": "worker.mjs",
+  "compatibility_date": "2026-10-06",
+  "rules": [
+    {
+      "type": "CompiledWasm",
+      "globs": [
+        "**/*.wasm"
+      ],
+      "fallthrough": true
+    }
+  ]
+}

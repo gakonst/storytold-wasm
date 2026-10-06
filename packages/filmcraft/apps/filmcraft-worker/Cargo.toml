@@ -1,0 +1,22 @@
+[package]
+name = "filmcraft-worker"
+description = "Headless FilmCraft WASM bindings and Cloudflare Worker HTTP host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+filmcraft-engine.workspace = true
+filmcraft-format.workspace = true
+filmcraft-media.workspace = true
+filmcraft-render.workspace = true
+serde_json.workspace = true
+wasm-bindgen = "=0.2.129"
+image = { version = "0.25", default-features = false, features = ["png"] }

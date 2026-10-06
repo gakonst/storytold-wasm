@@ -1,0 +1,27 @@
+[package]
+name = "effectcraft-worker"
+description = "Headless EffectCraft WASM bindings for Cloudflare Workers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+effectcraft-engine.workspace = true
+effectcraft-host.workspace = true
+effectcraft-media.workspace = true
+effectcraft-export.workspace = true
+effectcraft-expr.workspace = true
+effectcraft-script.workspace = true
+effectcraft-plugin = { workspace = true, features = ["wasm"] }
+serde.workspace = true
+serde_json.workspace = true
+image.workspace = true
+wasm-bindgen = "=0.2.129"

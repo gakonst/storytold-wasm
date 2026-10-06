@@ -1,0 +1,12 @@
+import {execFileSync} from 'node:child_process';
+import {mkdirSync} from 'node:fs';
+import {fileURLToPath} from 'node:url';
+import {resolve} from 'node:path';
+process.chdir(fileURLToPath(new URL('..',import.meta.url)));
+const env={...process.env,RUSTUP_TOOLCHAIN:process.env.RUSTUP_TOOLCHAIN || '1.97',CARGO_BUILD_JOBS:'1'};
+const run=(c,a)=>execFileSync(c,a,{stdio:'inherit',env});
+run('cargo',['build','--locked','--release','--target','wasm32-unknown-unknown','--manifest-path','core/Cargo.toml','-j','1']);
+mkdirSync('pkg',{recursive:true});
+const target=resolve(process.env.CARGO_TARGET_DIR || 'core/target');
+run(process.env.WASM_BINDGEN || 'wasm-bindgen',['--target','web','--out-dir','pkg','--out-name','core',`${target}/wasm32-unknown-unknown/release/artcraft_onnx_wasm.wasm`]);
+await import('./bundle.mjs');

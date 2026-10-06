@@ -1,0 +1,36 @@
+[package]
+name = "thumbnails"
+edition = "2024"
+version = "0.0.1"
+publish = false
+
+[lib]
+name = "thumbnails"
+path = "src/lib.rs"
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-build-acceleration"]
+
+[features]
+default = ["video"]
+video = ["dep:mp4", "dep:openh264", "dep:webp-animation"]
+
+[dependencies]
+# cargo-hakari workspace hack (faster compile times)
+workspace-build-acceleration.workspace = true
+
+# Internal
+images.workspace = true
+
+# External
+log.workspace = true
+# MP4 demuxing (pure Rust).
+mp4 = { workspace = true, optional = true }
+# H.264 decoding — Cisco's openh264, built from vendored source at compile
+# time; no runtime dependency on the customer machine.
+openh264 = { workspace = true, optional = true }
+# Animated WebP encoding — vendored libwebp, same no-runtime-deps property.
+webp-animation = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile.workspace = true

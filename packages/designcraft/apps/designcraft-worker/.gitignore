@@ -1,0 +1,4 @@
+/pkg/
+/dist/
+/.wrangler/
+/node_modules/

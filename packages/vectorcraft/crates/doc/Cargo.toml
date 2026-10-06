@@ -1,0 +1,21 @@
+[package]
+name = "vectorcraft-doc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "VectorCraft document model: artboards, layers, objects, appearance (pure data + serde)"
+
+[lints]
+workspace = true
+
+[dependencies]
+vectorcraft-geom = { workspace = true }
+vectorcraft-color = { workspace = true }
+kurbo = { workspace = true }
+image = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }

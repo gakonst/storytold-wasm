@@ -1,0 +1,27 @@
+[package]
+name = "artcraft_worker"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# An isolated graph avoids pulling desktop/Tauri/provider dependencies into WASM.
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wasm-bindgen = "=0.2.129"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22.1"
+models = { path = "../../crates/models" }
+images = { path = "../../crates/lib/files/images" }
+file_hashing = { path = "../../crates/lib/files/file_hashing" }
+mimetypes = { path = "../../crates/lib/files/mimetypes" }
+web_base64 = { path = "../../crates/lib/data/web_base64" }
+url_utils = { path = "../../crates/lib/url_utils" }
+jwt_light = { path = "../../crates/lib/jwt_light" }
+primitives = { path = "../../crates/lib/data/primitives" }
+
+thumbnails = { path = "../../crates/lib/files/thumbnails", default-features = false }
+

@@ -1,0 +1,15 @@
+{
+  "name": "artcraft-headless",
+  "main": "dist/worker.js",
+  "compatibility_date": "2026-02-10",
+  "no_bundle": true,
+  "rules": [
+    {
+      "type": "CompiledWasm",
+      "globs": [
+        "**/*.wasm"
+      ],
+      "fallthrough": true
+    }
+  ]
+}

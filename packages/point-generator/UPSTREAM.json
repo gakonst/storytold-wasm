@@ -1,0 +1,6 @@
+{
+  "repository": "https://github.com/storytold/point-generator",
+  "source_commit": "29938fd712e474a9a968f8a735080ecca708c8bd",
+  "scope": "Point generation and the compatible little-endian XYZ/RGBA binary layout. POST /generate, /encode and /decode. TCP transport is supplied by the embedding host.",
+  "extraction": "New portable arithmetic/protocol implementation; native applications and SDKs are excluded."
+}

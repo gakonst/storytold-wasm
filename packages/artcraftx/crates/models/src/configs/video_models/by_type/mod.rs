@@ -1,0 +1,10 @@
+pub mod beeble_video_models;
+pub mod grok_video_models;
+pub mod happy_horse_video_models;
+pub mod kling_video_models;
+pub mod minimax_video_models;
+pub mod preview_video_models;
+pub mod seedance_video_models;
+pub mod sora_video_models;
+pub mod veo_video_models;
+pub mod vidu_video_models;

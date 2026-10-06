@@ -1,0 +1,17 @@
+{
+  "name": "effectcraft-headless",
+  "main": "dist/worker.js",
+  "compatibility_date": "2026-02-10",
+  "rules": [
+    {
+      "type": "CompiledWasm",
+      "globs": [
+        "**/*.wasm"
+      ],
+      "fallthrough": true
+    }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}

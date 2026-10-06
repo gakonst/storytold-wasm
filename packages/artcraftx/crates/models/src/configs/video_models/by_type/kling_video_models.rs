@@ -1,0 +1,151 @@
+use crate::configs::video_model_config::VideoModelConfig;
+use crate::configs::video_models::strings;
+use crate::enums::common_aspect_ratio::CommonAspectRatio;
+use crate::enums::model_creator::ModelCreator;
+use crate::enums::video_model::VideoModel;
+
+const KLING_ASPECT_RATIOS: &[CommonAspectRatio] = &[
+  CommonAspectRatio::WideSixteenByNine,
+  CommonAspectRatio::Square,
+  CommonAspectRatio::TallNineBySixteen,
+];
+
+/// Kling video models.
+pub fn kling_video_models() -> Vec<VideoModelConfig> {
+  vec![
+    VideoModelConfig {
+      model: VideoModel::Kling3p0Pro,
+      model_creator: ModelCreator::Kling,
+      full_name: "Kling 3.0 Pro".to_string(),
+      selector_name: "Kling 3.0 Pro".to_string(),
+      selector_description: "High quality video model".to_string(),
+      selector_badges: strings(&["2 min."]),
+      progress_bar_ms: 300_000,
+      text_prompt_max_length: Some(2500),
+      starting_keyframe_supported: true,
+      ending_keyframe_supported: true,
+      show_generate_with_sound_toggle: true,
+      aspect_ratio_options: KLING_ASPECT_RATIOS.to_vec(),
+      aspect_ratio_default: Some(CommonAspectRatio::WideSixteenByNine),
+      duration_seconds_min: Some(3),
+      duration_seconds_max: Some(15),
+      duration_seconds_options: Some((3..=15).collect()),
+      duration_seconds_default: Some(5),
+      ..Default::default()
+    },
+    VideoModelConfig {
+      model: VideoModel::Kling3p0Standard,
+      model_creator: ModelCreator::Kling,
+      full_name: "Kling 3.0 Standard".to_string(),
+      selector_name: "Kling 3.0 Standard".to_string(),
+      selector_description: "Standard quality video model".to_string(),
+      selector_badges: strings(&["2 min."]),
+      progress_bar_ms: 300_000,
+      text_prompt_max_length: Some(2500),
+      starting_keyframe_supported: true,
+      ending_keyframe_supported: true,
+      show_generate_with_sound_toggle: true,
+      aspect_ratio_options: KLING_ASPECT_RATIOS.to_vec(),
+      aspect_ratio_default: Some(CommonAspectRatio::WideSixteenByNine),
+      duration_seconds_min: Some(3),
+      duration_seconds_max: Some(15),
+      duration_seconds_options: Some((3..=15).collect()),
+      duration_seconds_default: Some(5),
+      ..Default::default()
+    },
+    VideoModelConfig {
+      model: VideoModel::Kling2p6Pro,
+      model_creator: ModelCreator::Kling,
+      full_name: "Kling 2.6 Pro".to_string(),
+      selector_name: "Kling 2.6 Pro".to_string(),
+      selector_description: "Fast video model".to_string(),
+      selector_badges: strings(&["2 min."]),
+      progress_bar_ms: 300_000,
+      text_prompt_max_length: Some(2500),
+      starting_keyframe_supported: true,
+      starting_keyframe_required: true,
+      text_to_video_supported: false,
+      aspect_ratio_options: KLING_ASPECT_RATIOS.to_vec(),
+      aspect_ratio_default: Some(CommonAspectRatio::WideSixteenByNine),
+      duration_seconds_options: Some(vec![5, 10]),
+      duration_seconds_default: Some(5),
+      ..Default::default()
+    },
+    VideoModelConfig {
+      model: VideoModel::Kling2p5TurboPro,
+      model_creator: ModelCreator::Kling,
+      full_name: "Kling 2.5 Turbo Pro".to_string(),
+      selector_name: "Kling 2.5 Turbo Pro".to_string(),
+      selector_description: "Fast video model".to_string(),
+      selector_badges: strings(&["2 min."]),
+      progress_bar_ms: 300_000,
+      text_prompt_max_length: Some(2500),
+      starting_keyframe_supported: true,
+      ending_keyframe_supported: true,
+      aspect_ratio_options: KLING_ASPECT_RATIOS.to_vec(),
+      aspect_ratio_default: Some(CommonAspectRatio::WideSixteenByNine),
+      duration_seconds_options: Some(vec![5, 10]),
+      duration_seconds_default: Some(5),
+      ..Default::default()
+    },
+    VideoModelConfig {
+      model: VideoModel::Kling21Master,
+      model_creator: ModelCreator::Kling,
+      full_name: "Kling 2.1 Master".to_string(),
+      selector_name: "Kling 2.1 Master".to_string(),
+      selector_description: "Fast video model".to_string(),
+      selector_badges: strings(&["2 min."]),
+      progress_bar_ms: 300_000,
+      text_prompt_max_length: Some(2500),
+      starting_keyframe_supported: true,
+      starting_keyframe_required: true,
+      text_to_video_supported: false,
+      aspect_ratio_options: KLING_ASPECT_RATIOS.to_vec(),
+      aspect_ratio_default: Some(CommonAspectRatio::WideSixteenByNine),
+      duration_seconds_options: Some(vec![5, 10]),
+      duration_seconds_default: Some(5),
+      ..Default::default()
+    },
+    VideoModelConfig {
+      model: VideoModel::Kling21Pro,
+      model_creator: ModelCreator::Kling,
+      full_name: "Kling 2.1 Pro".to_string(),
+      selector_name: "Kling 2.1 Pro".to_string(),
+      selector_description: "Fast video model".to_string(),
+      selector_badges: strings(&["2 min."]),
+      progress_bar_ms: 300_000,
+      text_prompt_max_length: Some(2500),
+      starting_keyframe_supported: true,
+      starting_keyframe_required: true,
+      ending_keyframe_supported: true,
+      text_to_video_supported: false,
+      aspect_ratio_options: KLING_ASPECT_RATIOS.to_vec(),
+      aspect_ratio_default: Some(CommonAspectRatio::WideSixteenByNine),
+      duration_seconds_options: Some(vec![5, 10]),
+      duration_seconds_default: Some(5),
+      ..Default::default()
+    },
+    VideoModelConfig {
+      model: VideoModel::Kling16Pro,
+      model_creator: ModelCreator::Kling,
+      full_name: "Kling 1.6 Pro".to_string(),
+      selector_name: "Kling 1.6 Pro".to_string(),
+      selector_description: "Fast video model".to_string(),
+      selector_badges: strings(&["2 min."]),
+      progress_bar_ms: 300_000,
+      text_prompt_max_length: Some(2500),
+      starting_keyframe_supported: true,
+      starting_keyframe_required: true,
+      ending_keyframe_supported: true,
+      text_to_video_supported: false,
+      // NB: Kling 1.6 "Elements".
+      image_references_supported: true,
+      image_references_max: Some(4),
+      aspect_ratio_options: KLING_ASPECT_RATIOS.to_vec(),
+      aspect_ratio_default: Some(CommonAspectRatio::WideSixteenByNine),
+      duration_seconds_options: Some(vec![5, 10]),
+      duration_seconds_default: Some(5),
+      ..Default::default()
+    },
+  ]
+}

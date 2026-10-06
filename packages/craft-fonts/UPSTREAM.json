@@ -1,0 +1,10 @@
+{
+  "repository": "https://github.com/storytold/craft-fonts",
+  "source_commit": "ef68fba68e94e1e3694c47cb593114f1cc2cf737",
+  "worker_entry": "crates/craft-fonts-wasm",
+  "included_crates": [
+    "crates/craft-fonts",
+    "crates/craft-fonts-wasm"
+  ],
+  "note": "Extracted WASM dependency closure; Worker adapters and portability changes are maintained in this repository."
+}

@@ -1,0 +1,35 @@
+[package]
+name = "vectorcraft-pdf"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "VectorCraft PDF export and import"
+
+[lints]
+workspace = true
+
+[dependencies]
+vectorcraft-geom = { workspace = true }
+vectorcraft-doc = { workspace = true }
+vectorcraft-effects = { workspace = true }
+vectorcraft-brush = { workspace = true }
+vectorcraft-color = { workspace = true }
+vectorcraft-text = { workspace = true }
+kurbo = { workspace = true }
+thiserror = { workspace = true }
+flate2 = { workspace = true }
+image = { workspace = true }
+krilla = { workspace = true }
+hayro-syntax = "0.7.2"
+hayro-interpret = { version = "0.7.0", default-features = false, features = ["embed-fonts"] }
+log = { workspace = true }
+smallvec = "1"
+serde = { workspace = true }
+# PDF security (encrypt.rs): pure Rust, MIT OR Apache-2.0, builds for wasm.
+aes = "0.8"
+md-5 = { version = "0.10", default-features = false }
+sha2 = { version = "0.10", default-features = false }
+
+[dev-dependencies]
+vectorcraft-testkit = { workspace = true }
+serde_json = { workspace = true }

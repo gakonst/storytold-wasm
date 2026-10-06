@@ -1,0 +1,229 @@
+//! Type tool state-machine tests (the engine side is covered in vectorcraft-engine's
+//! `tests_textedit`).
+
+use super::*;
+use crate::testutil::{cx, paint};
+use vectorcraft_doc::{CharStyle, Document, Node, Selection};
+
+fn doc_with_text(text: &str) -> (Document, NodeId) {
+    let mut d = Document::new(500.0, 500.0);
+    let l = d.layers[0].id;
+    let id = d.alloc_id();
+    let t = TextObject::point(Point::new(100.0, 100.0), text, CharStyle { size: 20.0, ..Default::default() });
+    d.insert(Some(l), 0, Node::new(id, NodeKind::Text(Box::new(t)))).unwrap();
+    (d, id)
+}
+
+fn editing(text: &str) -> (Document, NodeId, TypeTool) {
+    let (d, id) = doc_with_text(text);
+    let mut tool = TypeTool::new("type");
+    tool.start_editing(id, 0);
+    (d, id, tool)
+}
+
+fn key(tool: &mut TypeTool, d: &Document, k: ToolKey, mods: Mods) -> Vec<Action> {
+    let (sel, p) = (Selection::default(), paint());
+    tool.key(&cx(d, &sel, &p), k, mods)
+}
+
+const SHIFT: Mods = Mods { shift: true, alt: false, cmd: false, ctrl: false, space: false };
+const CMD: Mods = Mods { shift: false, alt: false, cmd: true, ctrl: false, space: false };
+
+/// Apply the tool's previews like the engine would (on top of the session snapshot).
+fn apply(d: &mut Document, snapshot: &Document, acts: &[Action]) {
+    for a in acts {
+        if let Action::Preview(cmd, p) = a {
+            assert_eq!(cmd, "text.editRange");
+            *d = snapshot.clone();
+            let id = NodeId(p["id"].as_u64().unwrap());
+            let runs: Vec<TextRun> = serde_json::from_value(p["runs"].clone()).unwrap();
+            if let Some(NodeKind::Text(t)) = d.node_mut(id).map(|n| &mut n.kind) {
+                edit::replace_range_styled(&mut t.runs, p["start"].as_u64().unwrap() as usize, p["end"].as_u64().unwrap() as usize, &runs);
+            }
+        }
+    }
+}
+
+#[test]
+fn typing_is_one_coalesced_preview() {
+    let (mut d, id, mut tool) = editing("Hello");
+    let snap = d.clone();
+    let (sel, p) = (Selection::default(), paint());
+    tool.caret = 5;
+    tool.anchor = 5;
+    let a1 = tool.text_input(&cx(&d, &sel, &p), " w");
+    assert_eq!(a1[0], Action::Begin("Typing".into()));
+    apply(&mut d, &snap, &a1);
+    let a2 = tool.text_input(&cx(&d, &sel, &p), "orld");
+    apply(&mut d, &snap, &a2);
+    let NodeKind::Text(t) = &d.node(id).unwrap().kind else { panic!() };
+    assert_eq!(t.plain_text(), "Hello world");
+    assert!(!a2.iter().any(|a| matches!(a, Action::Begin(_))), "same session");
+    let Action::Preview(cmd, params) = a2.last().unwrap() else { panic!("{a2:?}") };
+    assert_eq!(cmd, "text.editRange");
+    assert_eq!(params["id"], json!(id.0));
+    assert_eq!((params["start"].as_u64(), params["end"].as_u64()), (Some(5), Some(5)));
+    let runs: Vec<TextRun> = serde_json::from_value(params["runs"].clone()).unwrap();
+    assert_eq!(runs[0].text, " world");
+    assert_eq!(tool.caret, 11);
+    // Moving the caret ends the session.
+    let a3 = key(&mut tool, &d, ToolKey::Left, Mods::default());
+    assert_eq!(a3, vec![Action::Commit]);
+    assert_eq!(tool.caret, 10);
+    // A document change behind the tool's back (undo) starts a fresh session.
+    let a4 = tool.text_input(&cx(&snap, &sel, &p), "!");
+    assert!(a4.contains(&Action::Begin("Typing".into())));
+}
+
+#[test]
+fn shift_arrows_select_and_typing_replaces() {
+    let (d, _, mut tool) = editing("Hello world");
+    key(&mut tool, &d, ToolKey::End, Mods::default());
+    assert_eq!(tool.caret, 11);
+    key(&mut tool, &d, ToolKey::Left, Mods { alt: true, ..SHIFT });
+    assert_eq!(tool.sel(), (6, 11));
+    let (sel, p) = (Selection::default(), paint());
+    let acts = tool.text_input(&cx(&d, &sel, &p), "there");
+    let Action::Preview(_, params) = acts.last().unwrap() else { panic!() };
+    assert_eq!((params["start"].as_u64(), params["end"].as_u64()), (Some(6), Some(11)));
+    assert_eq!(tool.caret, 11);
+    assert_eq!(tool.sel(), (11, 11));
+}
+
+#[test]
+fn word_and_line_navigation_keys() {
+    let (d, _, mut tool) = editing("One two three");
+    key(&mut tool, &d, ToolKey::Right, CMD);
+    assert_eq!(tool.caret, 3);
+    key(&mut tool, &d, ToolKey::Right, CMD);
+    assert_eq!(tool.caret, 7);
+    key(&mut tool, &d, ToolKey::Left, CMD);
+    assert_eq!(tool.caret, 4);
+    key(&mut tool, &d, ToolKey::End, SHIFT);
+    assert_eq!(tool.sel(), (4, 13));
+    // Left collapses a selection to its start.
+    key(&mut tool, &d, ToolKey::Left, Mods::default());
+    assert_eq!(tool.sel(), (4, 4));
+    key(&mut tool, &d, ToolKey::Home, Mods::default());
+    assert_eq!(tool.caret, 0);
+    key(&mut tool, &d, ToolKey::End, CMD);
+    assert_eq!(tool.caret, 13);
+}
+
+#[test]
+fn up_down_move_between_lines() {
+    let (d, _, mut tool) = editing("First line\nSecond line");
+    tool.caret = 3;
+    tool.anchor = 3;
+    key(&mut tool, &d, ToolKey::Down, Mods::default());
+    assert!(tool.caret > 11 && tool.caret < 16, "{}", tool.caret);
+    key(&mut tool, &d, ToolKey::Up, Mods::default());
+    assert_eq!(tool.caret, 3, "goal column kept");
+    key(&mut tool, &d, ToolKey::Down, SHIFT);
+    key(&mut tool, &d, ToolKey::Down, SHIFT);
+    assert_eq!(tool.sel(), (3, 22));
+}
+
+#[test]
+fn backspace_deletes_selection_or_word() {
+    let (d, _, mut tool) = editing("Hello big world");
+    tool.caret = 9;
+    tool.anchor = 9;
+    let acts = key(&mut tool, &d, ToolKey::Backspace, Mods { alt: true, ..Default::default() });
+    let Action::Preview(_, params) = acts.last().unwrap() else { panic!() };
+    assert_eq!((params["start"].as_u64(), params["end"].as_u64()), (Some(6), Some(9)));
+    assert_eq!(tool.caret, 6);
+}
+
+#[test]
+fn double_and_triple_click_select_word_and_paragraph() {
+    let (d, id, mut tool) = editing("Alpha beta\ngamma");
+    let (sel, p) = (Selection::default(), paint());
+    let t = TypeTool::text(&cx(&d, &sel, &p), id).unwrap().clone();
+    let lay = vectorcraft_text::layout(FontDb::global(), &t);
+    let (top, bot) = vectorcraft_text::caret_position(&lay, 7);
+    let at = t.xf * top.midpoint(bot);
+    let c = cx(&d, &sel, &p);
+    for k in [PointerKind::Down, PointerKind::Up, PointerKind::Down, PointerKind::Up, PointerKind::DoubleClick] {
+        tool.pointer(&c, &PointerEvent::new(k, at.x, at.y));
+    }
+    assert_eq!(tool.sel(), (6, 10), "word");
+    tool.pointer(&c, &PointerEvent::new(PointerKind::Down, at.x, at.y));
+    tool.pointer(&c, &PointerEvent::new(PointerKind::Up, at.x, at.y));
+    assert_eq!(tool.sel(), (0, 10), "paragraph");
+}
+
+#[test]
+fn drag_selects_and_overlay_highlights() {
+    let (d, id, mut tool) = editing("Select me please");
+    let (sel, p) = (Selection::default(), paint());
+    let c = cx(&d, &sel, &p);
+    let t = TypeTool::text(&c, id).unwrap().clone();
+    let lay = vectorcraft_text::layout(FontDb::global(), &t);
+    let pt = |b: usize| {
+        let (a, bb) = vectorcraft_text::caret_position(&lay, b);
+        t.xf * a.midpoint(bb)
+    };
+    let (a, b) = (pt(7), pt(9));
+    tool.pointer(&c, &PointerEvent::new(PointerKind::Down, a.x + 0.1, a.y));
+    assert!(tool.busy());
+    tool.pointer(&c, &PointerEvent::new(PointerKind::Drag, b.x + 0.1, b.y));
+    tool.pointer(&c, &PointerEvent::new(PointerKind::Up, b.x + 0.1, b.y));
+    assert_eq!(tool.sel(), (7, 9));
+    let o = tool.overlays(&c);
+    assert!(o.iter().any(|o| matches!(o, Overlay::Highlight { .. })));
+    let opts = tool.options();
+    assert_eq!((opts["start"].as_u64(), opts["end"].as_u64()), (Some(7), Some(9)));
+}
+
+#[test]
+fn select_all_and_styled_paste() {
+    let (d, _, mut tool) = editing("abc");
+    tool.set_option("selectAll", &json!(true));
+    let (sel, p) = (Selection::default(), paint());
+    let c = cx(&d, &sel, &p);
+    tool.key(&c, ToolKey::Right, SHIFT);
+    assert_eq!(tool.sel(), (0, 3));
+    let big = TextRun { text: "XY".into(), style: CharStyle { size: 40.0, ..Default::default() } };
+    tool.set_option("copy", &serde_json::to_value(vec![big.clone()]).unwrap());
+    let acts = tool.text_input(&c, "XY");
+    let Action::Preview(_, params) = acts.last().unwrap() else { panic!() };
+    let runs: Vec<TextRun> = serde_json::from_value(params["runs"].clone()).unwrap();
+    assert_eq!(runs, vec![big]);
+}
+
+#[test]
+fn common_affixes_are_char_safe() {
+    assert_eq!(common_affixes("hello", "help"), (3, 0));
+    assert_eq!(common_affixes("aXb", "ab"), (1, 1));
+    assert_eq!(common_affixes("aaa", "aaaa"), (3, 0));
+    assert_eq!(common_affixes("é1", "è1"), (0, 1));
+}
+
+#[test]
+fn area_and_path_tools_convert_clicked_paths() {
+    let (d, rect) = crate::testutil::doc_with_rect();
+    let (sel, p) = (Selection::default(), paint());
+    let c = cx(&d, &sel, &p);
+    let mut tool = TypeTool::new("areaType");
+    assert_eq!(tool.id(), "areaType");
+    tool.pointer(&c, &PointerEvent::new(PointerKind::Down, 100.0, 150.0));
+    let acts = tool.pointer(&c, &PointerEvent::new(PointerKind::Up, 100.0, 150.0));
+    assert!(
+        acts.iter().any(|a| matches!(a, Action::Exec(cmd, p) if cmd == "text.createInPath" && p["path"] == json!(rect.0) && p["mode"] == "area")),
+        "{acts:?}"
+    );
+    let mut tool = TypeTool::new("typeOnPath");
+    tool.pointer(&c, &PointerEvent::new(PointerKind::Down, 150.0, 100.0));
+    let acts = tool.pointer(&c, &PointerEvent::new(PointerKind::Up, 150.0, 100.0));
+    assert!(acts.iter().any(|a| matches!(a, Action::Exec(cmd, p) if cmd == "text.createInPath" && p["mode"] == "onPath")), "{acts:?}");
+}
+
+#[test]
+fn vertical_tools_preserve_their_ids_and_create_vertical_text() {
+    for id in ["verticalType", "verticalAreaType", "verticalTypeOnPath"] {
+        let tool = TypeTool::new(id);
+        assert_eq!(tool.id(), id);
+        assert!(tool.vertical);
+    }
+}

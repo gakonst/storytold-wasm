@@ -1,0 +1,1 @@
+{"name":"@storytold/cloud-worker","version":"0.1.0","private":true,"type":"module","scripts":{"build":"node scripts/build.mjs","test":"node --test tests/http.test.mjs","dev":"wrangler dev"},"devDependencies":{"esbuild":"0.27.3","miniflare":"4.20260210.0","wrangler":"4.147.0"}}

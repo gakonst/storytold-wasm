@@ -1,0 +1,9 @@
+* text=auto
+*.wasm binary
+*.ttf binary
+*.otf binary
+*.icc binary
+*.gz binary
+*.png binary
+*.jpg binary
+*.pdf binary

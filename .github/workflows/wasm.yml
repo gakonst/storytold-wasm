@@ -1,0 +1,46 @@
+name: WASM Workers
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  worker:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [photocraft, lightcraft, vectorcraft, designcraft, filmcraft, effectcraft, printcraft, craft-fonts, artcraftx, cloud-worker, onnx-inference, point-generator, actor-spawning, kinect-geometry]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.1
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ matrix.component }}
+          workspaces: |
+            packages/photocraft
+            packages/lightcraft
+            packages/vectorcraft
+            packages/designcraft
+            packages/filmcraft
+            packages/effectcraft
+            packages/printcraft
+            packages/craft-fonts
+            packages/artcraftx
+            packages/cloud-worker/core
+            packages/onnx-inference/core
+      - run: npm ci
+      - run: npm run setup
+      - run: npm run check
+      - run: npm run build -- ${{ matrix.component }}
+        env:
+          CARGO_BUILD_JOBS: 2
+      - run: npm test -- ${{ matrix.component }}
+      - run: npm run bundle -- ${{ matrix.component }}

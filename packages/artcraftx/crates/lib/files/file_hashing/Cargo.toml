@@ -1,0 +1,23 @@
+[package]
+name = "file_hashing"
+edition = "2024"
+version = "0.0.1"
+publish = false
+
+[lib]
+name = "file_hashing"
+path = "src/lib.rs"
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-build-acceleration"]
+
+[dependencies]
+# cargo-hakari workspace hack (faster compile times)
+workspace-build-acceleration.workspace = true
+
+# External
+# KEEP THIS TO A MINIMUM OR NIL.
+blake3.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

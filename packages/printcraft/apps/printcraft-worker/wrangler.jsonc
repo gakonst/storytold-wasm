@@ -1,0 +1,16 @@
+{
+  "name": "printcraft-wasm",
+  "main": "dist/index.js",
+  "no_bundle": true,
+  "find_additional_modules": true,
+  "rules": [
+    {
+      "type": "CompiledWasm",
+      "globs": [
+        "**/*.wasm"
+      ],
+      "fallthrough": true
+    }
+  ],
+  "compatibility_date": "2026-02-10"
+}

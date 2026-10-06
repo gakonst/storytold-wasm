@@ -1,0 +1,391 @@
+//! Drawing / path-editing tools driven through the session (tools → actions → `path.*` commands).
+
+use serde_json::json;
+use vectorcraft_doc::{NodeId, NodeKind};
+use vectorcraft_geom::{FillRule, PathData, Point};
+use vectorcraft_tools::{Mods, PointerEvent, PointerKind, ToolKey};
+
+use super::*;
+use crate::tooling::{UiRequest, ViewInfo};
+
+fn session() -> Session {
+    let mut s = Session::new();
+    s.execute("file.new", &json!({"width": 800, "height": 600})).unwrap();
+    s
+}
+
+fn view() -> ViewInfo {
+    ViewInfo { smart_guides: false, ..Default::default() }
+}
+
+fn rect(s: &mut Session, x: f64, y: f64, w: f64, h: f64) -> NodeId {
+    let r = s.execute("shape.rectangle", &json!({"x": x, "y": y, "width": w, "height": h})).unwrap();
+    NodeId(r["id"].as_u64().unwrap())
+}
+
+fn line(s: &mut Session, x1: f64, y1: f64, x2: f64, y2: f64) -> NodeId {
+    let r = s.execute("shape.line", &json!({"x1": x1, "y1": y1, "x2": x2, "y2": y2})).unwrap();
+    NodeId(r["id"].as_u64().unwrap())
+}
+
+fn paths(s: &Session) -> Vec<(NodeId, PathData)> {
+    let mut v = vec![];
+    s.doc().unwrap().doc.walk(|n| {
+        if let NodeKind::Path { path, .. } = &n.kind {
+            v.push((n.id, path.clone()));
+        }
+    });
+    v
+}
+
+fn path(s: &Session, id: NodeId) -> PathData {
+    s.doc().unwrap().doc.node(id).unwrap().path_data().unwrap().clone()
+}
+
+fn drag(s: &mut Session, tool: &str, pts: &[(f64, f64)], up_mods: Mods) -> Vec<UiRequest> {
+    let v = view();
+    s.select_tool(tool, v).unwrap();
+    s.pointer(&PointerEvent::new(PointerKind::Down, pts[0].0, pts[0].1), v).unwrap();
+    for &(x, y) in &pts[1..] {
+        s.pointer(&PointerEvent::new(PointerKind::Drag, x, y), v).unwrap();
+    }
+    let l = pts[pts.len() - 1];
+    s.pointer(&PointerEvent::new(PointerKind::Up, l.0, l.1).with_mods(up_mods), v).unwrap()
+}
+
+fn click(s: &mut Session, tool: &str, x: f64, y: f64) -> Vec<UiRequest> {
+    drag(s, tool, &[(x, y)], Mods::default())
+}
+
+/// A wavy stroke sampled every 2 pt.
+fn wave(x0: f64, x1: f64, y: f64) -> Vec<(f64, f64)> {
+    let n = ((x1 - x0) / 2.0) as usize;
+    (0..=n).map(|i| x0 + i as f64 * 2.0).map(|x| (x, y + 20.0 * ((x - x0) / 40.0).sin())).collect()
+}
+
+fn near(a: Point, b: Point) -> bool {
+    a.distance(b) < 1e-6
+}
+
+fn area(pd: &PathData) -> f64 {
+    vectorcraft_pathops::area(pd, FillRule::NonZero)
+}
+
+#[test]
+fn pencil_fits_freehand_stroke_as_one_undo_step() {
+    let mut s = session();
+    let pts = wave(100.0, 400.0, 200.0);
+    let undo_before = s.doc().unwrap().history.undo.len();
+    drag(&mut s, "pencil", &pts, Mods::default());
+    let ps = paths(&s);
+    assert_eq!(ps.len(), 1);
+    let p = &ps[0].1;
+    assert!(!p.is_closed());
+    assert!(p.anchor_count() >= 2 && p.anchor_count() < pts.len() / 4, "{} anchors", p.anchor_count());
+    let first = p.subpaths[0].anchors[0].p;
+    assert!(first.distance(Point::new(100.0, 200.0)) < 1e-6);
+    assert_eq!(s.doc().unwrap().history.undo.len(), undo_before + 1);
+    // Unfilled, stroked.
+    let n = s.doc().unwrap().doc.node(ps[0].0).unwrap().clone();
+    assert!(n.appearance.fill_paint().is_none());
+    assert!(!n.appearance.stroke_paint().is_none());
+}
+
+#[test]
+fn pencil_alt_closes_path() {
+    let mut s = session();
+    let mut pts: Vec<(f64, f64)> =
+        (0..=36).map(|i| (i as f64 * 10.0f64).to_radians()).map(|a| (300.0 + 80.0 * a.cos(), 300.0 + 80.0 * a.sin())).collect();
+    pts.pop();
+    drag(&mut s, "pencil", &pts, Mods { alt: true, ..Default::default() });
+    let ps = paths(&s);
+    assert!(ps[0].1.is_closed());
+}
+
+#[test]
+fn pencil_continues_selected_open_path() {
+    let mut s = session();
+    let id = line(&mut s, 100.0, 100.0, 200.0, 100.0);
+    drag(&mut s, "pencil", &[(202.0, 101.0), (230.0, 120.0), (260.0, 150.0), (300.0, 160.0)], Mods::default());
+    let ps = paths(&s);
+    assert_eq!(ps.len(), 1, "no new object");
+    let p = path(&s, id);
+    assert!(p.anchor_count() >= 3);
+    let last = p.subpaths[0].anchors.last().unwrap().p;
+    assert!(last.distance(Point::new(300.0, 160.0)) < 1e-6);
+    assert_eq!(p.subpaths[0].anchors[0].p, Point::new(100.0, 100.0));
+}
+
+#[test]
+fn paintbrush_uses_stroke_blob_brush_fills() {
+    let mut s = session();
+    drag(&mut s, "paintbrush", &wave(50.0, 200.0, 100.0), Mods::default());
+    let n = s.doc().unwrap().doc.node(paths(&s)[0].0).unwrap().clone();
+    assert!(n.appearance.fill_paint().is_none());
+    s.execute("select.none", &json!({})).unwrap();
+    drag(&mut s, "blobBrush", &[(100.0, 400.0), (200.0, 400.0)], Mods::default());
+    let ps = paths(&s);
+    assert_eq!(ps.len(), 2);
+    let blob = &ps[1].1;
+    assert!(blob.is_closed());
+    // 100 × 10 capsule ≈ 1000 + π·25.
+    assert!((area(blob) - (1000.0 + std::f64::consts::PI * 25.0)).abs() < 10.0, "{}", area(blob));
+    let bn = s.doc().unwrap().doc.node(ps[1].0).unwrap().clone();
+    assert!(bn.appearance.stroke_paint().is_none() && !bn.appearance.fill_paint().is_none());
+    // A second overlapping stroke of the same colour merges.
+    drag(&mut s, "blobBrush", &[(150.0, 380.0), (150.0, 450.0)], Mods::default());
+    let ps = paths(&s);
+    assert_eq!(ps.len(), 2, "merged into the first blob");
+    assert!(area(&ps[1].1) > 1500.0);
+}
+
+#[test]
+fn curvature_clicks_build_smooth_path() {
+    let mut s = session();
+    let v = view();
+    s.select_tool("curvature", v).unwrap();
+    for (x, y) in [(100.0, 300.0), (200.0, 200.0), (300.0, 300.0)] {
+        s.pointer(&PointerEvent::new(PointerKind::Down, x, y), v).unwrap();
+        s.pointer(&PointerEvent::new(PointerKind::Up, x, y), v).unwrap();
+    }
+    let ps = paths(&s);
+    assert_eq!(ps.len(), 1);
+    let sp = &ps[0].1.subpaths[0];
+    assert_eq!(sp.anchors.len(), 3);
+    assert_eq!(sp.anchors[1].kind, vectorcraft_geom::AnchorKind::Smooth);
+    // Alt-click the middle point → corner.
+    s.pointer(&PointerEvent::new(PointerKind::Down, 200.0, 200.0).with_mods(Mods { alt: true, ..Default::default() }), v).unwrap();
+    s.pointer(&PointerEvent::new(PointerKind::Up, 200.0, 200.0), v).unwrap();
+    assert!(!path(&s, ps[0].0).subpaths[0].anchors[1].has_out());
+    // Drag the middle point.
+    s.pointer(&PointerEvent::new(PointerKind::Down, 200.0, 200.0), v).unwrap();
+    s.pointer(&PointerEvent::new(PointerKind::Drag, 200.0, 150.0), v).unwrap();
+    s.pointer(&PointerEvent::new(PointerKind::Up, 200.0, 150.0), v).unwrap();
+    assert_eq!(path(&s, ps[0].0).subpaths[0].anchors[1].p, Point::new(200.0, 150.0));
+    // Esc ends; the next click starts a new path.
+    s.tool_key(ToolKey::Escape, Mods::default(), v).unwrap();
+    s.pointer(&PointerEvent::new(PointerKind::Down, 500.0, 500.0), v).unwrap();
+    s.pointer(&PointerEvent::new(PointerKind::Up, 500.0, 500.0), v).unwrap();
+    assert_eq!(paths(&s).len(), 2);
+}
+
+#[test]
+fn curvature_click_first_point_closes() {
+    let mut s = session();
+    let v = view();
+    s.select_tool("curvature", v).unwrap();
+    for (x, y) in [(100.0, 100.0), (200.0, 100.0), (150.0, 200.0), (100.0, 100.0)] {
+        s.pointer(&PointerEvent::new(PointerKind::Down, x, y), v).unwrap();
+        s.pointer(&PointerEvent::new(PointerKind::Up, x, y), v).unwrap();
+    }
+    let p = &paths(&s)[0].1;
+    assert!(p.is_closed());
+    assert_eq!(p.anchor_count(), 3);
+}
+
+#[test]
+fn add_and_delete_anchor_tools() {
+    let mut s = session();
+    let id = rect(&mut s, 100.0, 100.0, 100.0, 100.0);
+    click(&mut s, "addAnchor", 150.0, 100.0);
+    let p = path(&s, id);
+    assert_eq!(p.anchor_count(), 5);
+    assert!(near(p.subpaths[0].anchors[1].p, Point::new(150.0, 100.0)));
+    click(&mut s, "deleteAnchor", 150.0, 100.0);
+    click(&mut s, "deleteAnchor", 200.0, 200.0);
+    let p = path(&s, id);
+    assert_eq!(p.anchor_count(), 3);
+    assert!(p.is_closed());
+}
+
+#[test]
+fn delete_anchor_on_circle_keeps_curve() {
+    let mut s = session();
+    let r = s.execute("shape.ellipse", &json!({"x": 100, "y": 100, "width": 200, "height": 200})).unwrap();
+    let id = NodeId(r["id"].as_u64().unwrap());
+    let before = path(&s, id);
+    let a = before.subpaths[0].anchors[1].p;
+    click(&mut s, "deleteAnchor", a.x, a.y);
+    let p = path(&s, id);
+    assert_eq!(p.anchor_count(), before.anchor_count() - 1);
+    // The remaining curve still bulges out towards the removed anchor.
+    let b = p.bounds().unwrap();
+    assert!(b.width() > 150.0 && b.height() > 150.0, "{b:?}");
+}
+
+#[test]
+fn anchor_point_tool_converts() {
+    let mut s = session();
+    let id = rect(&mut s, 100.0, 100.0, 100.0, 100.0);
+    drag(&mut s, "anchorPoint", &[(100.0, 100.0), (130.0, 80.0)], Mods::default());
+    let a = path(&s, id).subpaths[0].anchors[0];
+    assert_eq!(a.kind, vectorcraft_geom::AnchorKind::Smooth);
+    assert_eq!(a.h_out, Point::new(130.0, 80.0));
+    assert_eq!(a.h_in, Point::new(70.0, 120.0));
+    // Click the smooth anchor → corner again.
+    click(&mut s, "anchorPoint", 100.0, 100.0);
+    let a = path(&s, id).subpaths[0].anchors[0];
+    assert!(!a.has_in() && !a.has_out());
+    // Drag a segment → it bends so the grabbed point follows.
+    drag(&mut s, "anchorPoint", &[(150.0, 200.0), (150.0, 240.0)], Mods::default());
+    let p = path(&s, id);
+    let (_, _, _, q, d) = p.nearest(Point::new(150.0, 240.0)).unwrap();
+    assert!(d < 0.5, "{q:?}");
+}
+
+#[test]
+fn scissors_opens_closed_path() {
+    let mut s = session();
+    let id = rect(&mut s, 100.0, 100.0, 100.0, 100.0);
+    click(&mut s, "scissors", 200.0, 150.0);
+    let p = path(&s, id);
+    assert!(!p.is_closed());
+    assert_eq!(p.anchor_count(), 6);
+    assert!(near(p.subpaths[0].anchors[0].p, Point::new(200.0, 150.0)));
+    assert!(near(p.subpaths[0].anchors[5].p, Point::new(200.0, 150.0)));
+}
+
+#[test]
+fn scissors_splits_open_path_in_two() {
+    let mut s = session();
+    let id = line(&mut s, 100.0, 100.0, 300.0, 100.0);
+    click(&mut s, "scissors", 150.0, 100.0);
+    let ps = paths(&s);
+    assert_eq!(ps.len(), 2);
+    assert!(near(path(&s, id).subpaths[0].anchors[1].p, Point::new(150.0, 100.0)));
+    assert!(near(ps[1].1.subpaths[0].anchors[0].p, Point::new(150.0, 100.0)));
+    assert_eq!(ps[1].1.subpaths[0].anchors[1].p, Point::new(300.0, 100.0));
+    assert_eq!(s.doc().unwrap().selection.objects.len(), 2);
+    // Clicking an end point is refused without panicking.
+    assert!(s.execute("path.split", &json!({"id": id.0, "subpath": 0, "anchor": 0})).is_err());
+}
+
+#[test]
+fn knife_cuts_rect_into_two_pieces() {
+    let mut s = session();
+    rect(&mut s, 100.0, 100.0, 200.0, 100.0);
+    s.execute("select.none", &json!({})).unwrap();
+    let undo = s.doc().unwrap().history.undo.len();
+    drag(&mut s, "knife", &[(200.0, 50.0), (210.0, 150.0), (200.0, 250.0)], Mods::default());
+    let ps = paths(&s);
+    assert_eq!(ps.len(), 2);
+    let total: f64 = ps.iter().map(|(_, p)| area(p)).sum();
+    assert!((total - 20000.0).abs() < 50.0, "{total}");
+    assert!(ps.iter().all(|(_, p)| p.is_closed() && area(p) > 9000.0));
+    assert_eq!(s.doc().unwrap().history.undo.len(), undo + 1);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(paths(&s).len(), 1);
+}
+
+#[test]
+fn knife_partial_cut_does_nothing() {
+    let mut s = session();
+    let id = rect(&mut s, 100.0, 100.0, 200.0, 100.0);
+    s.execute("select.none", &json!({})).unwrap();
+    let r = s.execute("path.knife", &json!({"points": [[200, 50], [200, 150]]})).unwrap();
+    assert_eq!(r["ids"], json!([]));
+    assert_eq!(path(&s, id).anchor_count(), 4);
+}
+
+#[test]
+fn eraser_splits_shapes_and_lines() {
+    let mut s = session();
+    rect(&mut s, 100.0, 100.0, 200.0, 100.0);
+    line(&mut s, 100.0, 300.0, 300.0, 300.0);
+    s.execute("select.none", &json!({})).unwrap();
+    drag(&mut s, "eraser", &[(200.0, 50.0), (200.0, 350.0)], Mods::default());
+    let ps = paths(&s);
+    assert_eq!(ps.len(), 4, "two rect halves + two line pieces");
+    let closed: Vec<&PathData> = ps.iter().map(|p| &p.1).filter(|p| p.is_closed()).collect();
+    assert_eq!(closed.len(), 2);
+    let total: f64 = closed.iter().map(|p| area(p)).sum();
+    assert!((total - (20000.0 - 1000.0)).abs() < 50.0, "{total}");
+    let open: Vec<&PathData> = ps.iter().map(|p| &p.1).filter(|p| !p.is_closed()).collect();
+    let len: f64 = open.iter().map(|p| p.length()).sum();
+    assert!((len - 190.0).abs() < 0.1, "{len}");
+}
+
+#[test]
+fn eraser_removes_small_shape_entirely() {
+    let mut s = session();
+    rect(&mut s, 100.0, 100.0, 4.0, 4.0);
+    s.execute("select.none", &json!({})).unwrap();
+    s.execute("path.eraseRegion", &json!({"points": [[102, 102]], "size": 20})).unwrap();
+    assert!(paths(&s).is_empty());
+}
+
+#[test]
+fn path_eraser_splits_selected_path() {
+    let mut s = session();
+    let id = line(&mut s, 100.0, 100.0, 300.0, 100.0);
+    drag(&mut s, "pathEraser", &[(180.0, 100.0), (220.0, 100.0)], Mods::default());
+    let ps = paths(&s);
+    assert_eq!(ps.len(), 2);
+    assert!(path(&s, id).subpaths[0].anchors[1].p.x < 180.0);
+}
+
+#[test]
+fn smooth_tool_reduces_jagged_path() {
+    let mut s = session();
+    let anchors: Vec<_> = (0..=40).map(|i| json!({"x": 100.0 + i as f64 * 5.0, "y": 200.0 + if i % 2 == 0 { 0.0 } else { 1.5 }})).collect();
+    let r = s.execute("path.create", &json!({"anchors": anchors})).unwrap();
+    let id = NodeId(r["id"].as_u64().unwrap());
+    drag(&mut s, "smooth", &[(90.0, 200.0), (200.0, 200.0), (310.0, 200.0)], Mods::default());
+    let p = path(&s, id);
+    assert!(p.anchor_count() < 20, "{}", p.anchor_count());
+    assert_eq!(p.subpaths[0].anchors[0].p, Point::new(100.0, 200.0));
+}
+
+#[test]
+fn join_tool_joins_two_lines() {
+    let mut s = session();
+    let a = line(&mut s, 100.0, 100.0, 200.0, 100.0);
+    line(&mut s, 205.0, 100.0, 300.0, 150.0);
+    s.execute("select.none", &json!({})).unwrap();
+    drag(&mut s, "join", &[(202.0, 90.0), (202.0, 110.0)], Mods::default());
+    let ps = paths(&s);
+    assert_eq!(ps.len(), 1);
+    let p = path(&s, a);
+    assert_eq!(p.anchor_count(), 3);
+    assert_eq!(p.subpaths[0].anchors[1].p, Point::new(202.5, 100.0));
+    assert_eq!(p.subpaths[0].anchors[2].p, Point::new(300.0, 150.0));
+}
+
+#[test]
+fn line_family_tools_draw_and_click_asks_dialog() {
+    let mut s = session();
+    drag(&mut s, "arc", &[(100.0, 100.0), (200.0, 150.0)], Mods::default());
+    drag(&mut s, "spiral", &[(400.0, 300.0), (450.0, 300.0)], Mods::default());
+    drag(&mut s, "rectangularGrid", &[(100.0, 300.0), (200.0, 400.0)], Mods::default());
+    drag(&mut s, "polarGrid", &[(500.0, 100.0), (600.0, 200.0)], Mods::default());
+    let top = s.doc().unwrap().doc.layers[0].children().unwrap().len();
+    assert_eq!(top, 4);
+    let b = paths(&s)[0].1.bounds().unwrap();
+    assert!((b.width() - 100.0).abs() < 1e-6 && (b.height() - 50.0).abs() < 1e-6, "{b:?}");
+    let ui = click(&mut s, "polarGrid", 10.0, 10.0);
+    assert_eq!(ui, vec![UiRequest::Dialog("polarGrid".into(), json!({"x": 10.0, "y": 10.0}))]);
+}
+
+#[test]
+fn draw2_commands_reject_bad_params() {
+    let mut s = session();
+    let id = rect(&mut s, 0.0, 0.0, 10.0, 10.0);
+    for (cmd, p) in [
+        ("path.freehand", json!({})),
+        ("path.freehand", json!({"points": [[1, 2]]})),
+        ("path.curvature", json!({"points": []})),
+        ("path.removeAnchor", json!({"id": id.0, "anchor": 99})),
+        ("path.convertAnchor", json!({"id": 9999, "anchor": 0, "to": "corner"})),
+        ("path.reshapeSegment", json!({"id": id.0, "segment": 42})),
+        ("path.split", json!({"id": id.0})),
+        ("path.split", json!({"id": id.0, "segment": 0, "t": "x"})),
+        ("path.knife", json!({"points": [[0, 0]]})),
+        ("path.eraseRegion", json!({"points": [[0, 0]], "size": -1})),
+        ("path.blob", json!({"points": "nope"})),
+        ("path.joinScrub", json!({"points": []})),
+    ] {
+        let before = s.doc().unwrap().history.undo.len();
+        assert!(s.execute(cmd, &p).is_err(), "{cmd} {p}");
+        assert_eq!(s.doc().unwrap().history.undo.len(), before, "{cmd} left an undo step");
+    }
+}

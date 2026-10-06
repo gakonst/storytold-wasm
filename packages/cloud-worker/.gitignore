@@ -1,0 +1,6 @@
+/core/target/
+/pkg/
+/.wrangler/
+/node_modules/
+/tests/.bundle/
+__pycache__/

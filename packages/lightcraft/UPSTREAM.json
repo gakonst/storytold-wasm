@@ -1,0 +1,24 @@
+{
+  "repository": "https://github.com/storytold/lightcraft",
+  "source_commit": "bd3185ef4d95384487617e60a6911c085489f565",
+  "worker_entry": "apps/lightcraft-worker",
+  "included_crates": [
+    "apps/lightcraft-worker",
+    "crates/catalog",
+    "crates/codecs",
+    "crates/color",
+    "crates/develop",
+    "crates/engine",
+    "crates/geom",
+    "crates/gpu",
+    "crates/merge",
+    "crates/meta",
+    "crates/pipeline",
+    "crates/preview",
+    "crates/raster",
+    "crates/raw",
+    "crates/scenes",
+    "crates/tiff"
+  ],
+  "note": "Extracted WASM dependency closure; Worker adapters and portability changes are maintained in this repository."
+}

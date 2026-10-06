@@ -1,0 +1,6 @@
+{
+  "repository": "https://github.com/storytold/ActorSpawningPlugin",
+  "source_commit": "b920a363b0ab473f5ced3d4e772dc401831a87c9",
+  "scope": "Actor location and random placement arithmetic. POST /location and /randomLocation. This does not create actors inside Unreal Engine.",
+  "extraction": "New portable arithmetic/protocol implementation; native applications and SDKs are excluded."
+}

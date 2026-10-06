@@ -1,0 +1,14 @@
+{
+  "name": "filmcraft-headless",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-02-10",
+  "rules": [
+    {
+      "type": "CompiledWasm",
+      "globs": [
+        "**/*.wasm"
+      ],
+      "fallthrough": true
+    }
+  ]
+}

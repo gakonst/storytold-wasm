@@ -1,0 +1,14 @@
+{
+  "name": "@storytold-wasm/designcraft-worker",
+  "private": true,
+  "scripts": {
+    "build": "bash build.sh",
+    "test": "node --test test/worker.cjs",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "esbuild": "0.27.3",
+    "miniflare": "4.20260210.0",
+    "wrangler": "4.147.0"
+  }
+}
